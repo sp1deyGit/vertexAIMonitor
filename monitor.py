@@ -1,8 +1,10 @@
 import json
 import os
+import smtplib
 import sys
 import time
 from datetime import datetime
+from email.mime.text import MIMEText
 from typing import Optional
 
 import requests
@@ -11,7 +13,6 @@ import requests
 LOGIN_URL      = "https://api.dev.eka.io/support/auth/token"
 REFRESH_URL    = "https://api.dev.eka.io/support/auth/token/refresh"
 GET_ALL_URL    = "https://api.dev.eka.io/support/vertexAi/getAllConfigs"
-EMAILJS_URL    = "https://api.emailjs.com/api/v1.0/email/send"
 SNAPSHOT_FILE  = "snapshot.json"
 LOG_FILE       = "change_log.json"
 
@@ -19,12 +20,11 @@ POLL_INTERVAL  = 10
 RUN_DURATION   = 120
 
 # ENV
-USERNAME         = os.environ.get("SUPER_USERNAME", "")
-PASSWORD         = os.environ.get("SUPER_PASSWORD", "")
-EMAILJS_SERVICE  = os.environ.get("EMAILJS_SERVICE_ID", "")
-EMAILJS_TEMPLATE = os.environ.get("EMAILJS_TEMPLATE_ID", "")
-EMAILJS_KEY      = os.environ.get("EMAILJS_PUBLIC_KEY", "")
-ALERT_EMAIL      = os.environ.get("ALERT_EMAIL", "")
+USERNAME    = os.environ.get("SUPER_USERNAME", "")
+PASSWORD    = os.environ.get("SUPER_PASSWORD", "")
+SMTP_USER   = os.environ.get("GMAIL_USER", "")      # your Gmail address
+SMTP_PASS   = os.environ.get("GMAIL_APP_PASS", "")  # 16-char app password
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")
 
 
 # AUTH STATE
@@ -51,7 +51,7 @@ class AuthSession:
 _session = AuthSession()
 
 
-# LOGIN 
+# LOGIN
 def login() -> Optional[str]:
     """
     POST {username, password} → get access_token + refresh_token + expires_at.
@@ -125,7 +125,7 @@ def get_valid_token() -> Optional[str]:
     return refresh_token()
 
 
-#FETCH CONFIGS
+# FETCH CONFIGS
 def fetch_configs() -> Optional[dict]:
     token = get_valid_token()
     if not token:
@@ -145,7 +145,7 @@ def fetch_configs() -> Optional[dict]:
         return None
 
 
-# SNAPSHOT 
+# SNAPSHOT
 def load_snapshot() -> dict:
     if os.path.exists(SNAPSHOT_FILE):
         try:
@@ -162,7 +162,7 @@ def save_snapshot(data: dict):
     print(f"[SNAPSHOT] Saved {len(data)} configs")
 
 
-#  DIFF ENGINE
+# DIFF ENGINE
 FLAT_TOP   = ["version", "type", "locationId", "projectId", "apiEndPoint",
               "model", "systemInstruction", "userInstruction"]
 GC_FIELDS  = ["temperature", "maxOutputTokens", "topP", "seed"]
@@ -237,7 +237,7 @@ def find_changes(old_snap: dict, new_snap: dict) -> list:
     return results
 
 
-#CHANGE LOG
+# CHANGE LOG
 def append_log(entries: list):
     existing = []
     if os.path.exists(LOG_FILE):
@@ -287,51 +287,41 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
 
 
 def send_email(subject: str, body: str) -> bool:
-    if not all([EMAILJS_SERVICE, EMAILJS_TEMPLATE, EMAILJS_KEY, ALERT_EMAIL]):
-        print("[EMAIL] EmailJS not fully configured — skipping alert")
+    if not all([SMTP_USER, SMTP_PASS, ALERT_EMAIL]):
+        print("[EMAIL] Gmail credentials not configured — skipping alert")
         return False
 
-    payload = {
-        "service_id":  EMAILJS_SERVICE,
-        "template_id": EMAILJS_TEMPLATE,
-        "user_id":     EMAILJS_KEY,
-        "template_params": {
-            "to_email":  ALERT_EMAIL,
-            "subject":   subject,
-            "message":   body,
-            "from_name": "VertexWatch",
-        },
-    }
+    recipients = [e.strip() for e in ALERT_EMAIL.split(",") if e.strip()]
+
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = ", ".join(recipients)
 
     try:
-        resp = requests.post(
-            EMAILJS_URL,
-            json=payload,
-            headers={"origin": "https://github.com"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            print(f"[EMAIL] Alert sent → {ALERT_EMAIL}")
-            return True
-        else:
-            print(f"[EMAIL] Failed — status {resp.status_code}: {resp.text}")
-            return False
-    except requests.RequestException as e:
-        print(f"[EMAIL] Request error: {e}")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_USER, recipients, msg.as_string())
+        print(f"[EMAIL] Alert sent → {', '.join(recipients)}")
+        return True
+    except smtplib.SMTPAuthenticationError:
+        print("[EMAIL] Authentication failed — check GMAIL_USER and GMAIL_APP_PASS")
         return False
-
+    except Exception as e:
+        print(f"[EMAIL] Failed: {e}")
+        return False
 
 # MAIN POLL LOOP
 def main():
     print(f"[START] VertexWatch — {datetime.now().isoformat()}")
     print(f"[START] Polling every {POLL_INTERVAL}s for {RUN_DURATION}s")
 
-    # ── Initial login to populate session
+    # Initial login to populate session
     if not login():
         print("[FATAL] Cannot authenticate — check SUPER_USERNAME / SUPER_PASSWORD secrets")
         sys.exit(1)
 
-    # ── Load persisted snapshot (restored from Actions cache)
+    # Load persisted snapshot (restored from Actions cache)
     snapshot = load_snapshot()
     is_first_run = not snapshot
 
@@ -349,7 +339,7 @@ def main():
         now = datetime.now().isoformat(timespec="seconds")
         print(f"\n[POLL #{poll_count}] {now}")
 
-        # ── Fetch latest configs (get_valid_token handles refresh automatically)
+        # Fetch latest configs (get_valid_token handles refresh automatically)
         current = fetch_configs()
 
         if current is None:
@@ -401,7 +391,7 @@ def main():
             else:
                 print("[POLL] No changes detected")
 
-        # ── Wait before next poll
+        # Wait before next poll
         elapsed = time.time() - start_time
         remaining = RUN_DURATION - elapsed
         wait = min(POLL_INTERVAL, remaining)
