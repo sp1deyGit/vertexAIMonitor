@@ -1,0 +1,48 @@
+name: VertexWatch
+
+on:
+  workflow_dispatch:        # manual trigger
+  schedule:
+    - cron: "*/5 * * * *"  # every 5 minutes (optional, remove if not needed)
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            snapshot.json
+            change_log.json
+          key: vertexwatch-${{ github.run_id }}
+          restore-keys: |
+            vertexwatch-
+
+      - name: Run monitor
+        env:
+          SUPER_USERNAME: ${{ secrets.SUPER_USERNAME }}
+          SUPER_PASSWORD: ${{ secrets.SUPER_PASSWORD }}
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
+        run: python vertex_watch.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vertexwatch-logs
+          path: change_log.json
