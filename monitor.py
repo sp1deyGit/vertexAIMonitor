@@ -15,12 +15,12 @@ EMAILJS_URL    = "https://api.emailjs.com/api/v1.0/email/send"
 SNAPSHOT_FILE  = "snapshot.json"
 LOG_FILE       = "change_log.json"
 
-POLL_INTERVAL  = 30    # seconds between each getAllConfigs call
-RUN_DURATION   = 270   # seconds total (4.5 min — safely within 6 min job timeout)
+POLL_INTERVAL  = 10
+RUN_DURATION   = 120
 
 # ENV
-USERNAME         = os.environ.get("VERTEX_USERNAME", "")
-PASSWORD         = os.environ.get("VERTEX_PASSWORD", "")
+USERNAME         = os.environ.get("SUPER_USERNAME", "")
+PASSWORD         = os.environ.get("SUPER_PASSWORD", "")
 EMAILJS_SERVICE  = os.environ.get("EMAILJS_SERVICE_ID", "")
 EMAILJS_TEMPLATE = os.environ.get("EMAILJS_TEMPLATE_ID", "")
 EMAILJS_KEY      = os.environ.get("EMAILJS_PUBLIC_KEY", "")
@@ -58,7 +58,7 @@ def login() -> Optional[str]:
     Response shape: {name, access_token, refresh_token, token_type, expires_at}
     """
     if not USERNAME or not PASSWORD:
-        print("[ERROR] VERTEX_USERNAME / VERTEX_PASSWORD not set in GitHub secrets")
+        print("[ERROR] SUPER_USERNAME / SUPER_PASSWORD not set in GitHub secrets")
         return None
 
     try:
@@ -328,7 +328,7 @@ def main():
 
     # ── Initial login to populate session
     if not login():
-        print("[FATAL] Cannot authenticate — check VERTEX_USERNAME / VERTEX_PASSWORD secrets")
+        print("[FATAL] Cannot authenticate — check SUPER_USERNAME / SUPER_PASSWORD secrets")
         sys.exit(1)
 
     # ── Load persisted snapshot (restored from Actions cache)
