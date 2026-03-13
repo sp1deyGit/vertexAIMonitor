@@ -13,6 +13,7 @@ import requests
 LOGIN_URL      = "https://api.dev.eka.io/support/auth/token"
 REFRESH_URL    = "https://api.dev.eka.io/support/auth/token/refresh"
 GET_ALL_URL    = "https://api.dev.eka.io/support/vertexAi/getAllConfigs"
+GET_ONE_URL    = "https://api.dev.eka.io/support/vertexAi/getConfig"
 SNAPSHOT_FILE  = "snapshot.json"
 LOG_FILE       = "change_log.json"
 
@@ -22,8 +23,8 @@ RUN_DURATION   = 120
 # ENV
 USERNAME    = os.environ.get("SUPER_USERNAME", "")
 PASSWORD    = os.environ.get("SUPER_PASSWORD", "")
-SMTP_USER   = os.environ.get("GMAIL_USER", "")      # your Gmail address
-SMTP_PASS   = os.environ.get("GMAIL_APP_PASS", "")  # 16-char app password
+SMTP_USER   = os.environ.get("GMAIL_USER", "")
+SMTP_PASS   = os.environ.get("GMAIL_APP_PASS", "")
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")
 
 
@@ -34,11 +35,10 @@ class AuthSession:
     def __init__(self):
         self.access_token:  Optional[str] = None
         self.refresh_token: Optional[str] = None
-        self.expires_at:    int = 0          # epoch ms from API response
+        self.expires_at:    int = 0
         self.user_name:     str = ""
 
     def is_expired(self, buffer_ms: int = 60_000) -> bool:
-        """True if token expires within the next `buffer_ms` milliseconds."""
         now_ms = int(time.time() * 1000)
         return now_ms >= (self.expires_at - buffer_ms)
 
@@ -53,10 +53,6 @@ _session = AuthSession()
 
 # LOGIN
 def login() -> Optional[str]:
-    """
-    POST {username, password} → get access_token + refresh_token + expires_at.
-    Response shape: {name, access_token, refresh_token, token_type, expires_at}
-    """
     if not USERNAME or not PASSWORD:
         print("[ERROR] SUPER_USERNAME / SUPER_PASSWORD not set in GitHub secrets")
         return None
@@ -69,7 +65,6 @@ def login() -> Optional[str]:
         )
         resp.raise_for_status()
         body = resp.json()
-
         _session.from_response(body)
 
         if not _session.access_token:
@@ -86,10 +81,6 @@ def login() -> Optional[str]:
 
 
 def refresh_token() -> Optional[str]:
-    """
-    Use the refresh_token to get a new access_token without re-entering credentials.
-    Falls back to full login if refresh fails.
-    """
     if not _session.refresh_token:
         print("[AUTH] No refresh token — falling back to full login")
         return login()
@@ -118,7 +109,6 @@ def refresh_token() -> Optional[str]:
 
 
 def get_valid_token() -> Optional[str]:
-    """Return a valid (non-expired) token, refreshing proactively if needed."""
     if _session.access_token and not _session.is_expired():
         return _session.access_token
     print("[AUTH] Token expired or missing — refreshing…")
@@ -126,6 +116,23 @@ def get_valid_token() -> Optional[str]:
 
 
 # FETCH CONFIGS
+def fetch_config_by_id(config_id: str) -> Optional[dict]:
+    token = get_valid_token()
+    if not token:
+        return None
+    try:
+        resp = requests.get(
+            f"{GET_ONE_URL}/{config_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        print(f"[ERROR] getConfig/{config_id} failed: {e}")
+        return None
+
+
 def fetch_configs() -> Optional[dict]:
     token = get_valid_token()
     if not token:
@@ -139,7 +146,21 @@ def fetch_configs() -> Optional[dict]:
         resp.raise_for_status()
         body = resp.json()
         configs = body.get("data", [])
-        return {str(c["id"]): c for c in configs}
+
+        result = {}
+        for c in configs:
+            cid = str(c["id"])
+            full = fetch_config_by_id(cid)
+            if full:
+                result[cid] = full
+                print(f"[FETCH] Config #{cid} ({full.get('type', '?')}) fetched")
+            else:
+                # Fallback to summary data if detail fetch fails
+                result[cid] = c
+                print(f"[FETCH] Config #{cid} — detail fetch failed, using summary")
+
+        return result
+
     except requests.RequestException as e:
         print(f"[ERROR] getAllConfigs failed: {e}")
         return None
@@ -163,9 +184,9 @@ def save_snapshot(data: dict):
 
 
 # DIFF ENGINE
-FLAT_TOP   = ["version", "type", "locationId", "projectId", "apiEndPoint",
-              "model", "systemInstruction", "userInstruction"]
-GC_FIELDS  = ["temperature", "maxOutputTokens", "topP", "seed"]
+FLAT_TOP  = ["version", "type", "locationId", "projectId", "apiEndPoint",
+             "model", "systemInstruction", "userInstruction"]
+GC_FIELDS = ["temperature", "maxOutputTokens", "topP", "seed"]
 
 
 def flatten(cfg: dict) -> dict:
@@ -193,10 +214,6 @@ def diff(old: dict, new: dict) -> list:
 
 
 def find_changes(old_snap: dict, new_snap: dict) -> list:
-    """
-    Compare two full snapshots.
-    Returns list of {configId, version, type, changes:[{field,old,new}]}
-    """
     results = []
     all_ids = set(old_snap) | set(new_snap)
 
@@ -205,7 +222,6 @@ def find_changes(old_snap: dict, new_snap: dict) -> list:
         new_cfg = new_snap.get(cid)
 
         if old_cfg is None:
-            # New config added
             results.append({
                 "configId": cid,
                 "version":  new_cfg.get("version", "?"),
@@ -215,7 +231,6 @@ def find_changes(old_snap: dict, new_snap: dict) -> list:
                              for k, v in flatten(new_cfg).items()],
             })
         elif new_cfg is None:
-            # Config removed
             results.append({
                 "configId": cid,
                 "version":  old_cfg.get("version", "?"),
@@ -275,7 +290,7 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
             body += f"\n  {'Field':<42}  {'Before':<20}  After\n"
             body += f"  {'─'*42}  {'─'*20}  {'─'*20}\n"
             for c in item["changes"]:
-                field = c["field"].replace("generationConfig.", "")
+                field = c["field"].replace("generationConfig.", "gc.")
                 body += f"  {field:<42}  {str(c['old']):<20}  {c['new']}\n"
         body += "\n"
 
@@ -311,17 +326,16 @@ def send_email(subject: str, body: str) -> bool:
         print(f"[EMAIL] Failed: {e}")
         return False
 
+
 # MAIN POLL LOOP
 def main():
     print(f"[START] VertexWatch — {datetime.now().isoformat()}")
     print(f"[START] Polling every {POLL_INTERVAL}s for {RUN_DURATION}s")
 
-    # Initial login to populate session
     if not login():
         print("[FATAL] Cannot authenticate — check SUPER_USERNAME / SUPER_PASSWORD secrets")
         sys.exit(1)
 
-    # Load persisted snapshot (restored from Actions cache)
     snapshot = load_snapshot()
     is_first_run = not snapshot
 
@@ -339,7 +353,6 @@ def main():
         now = datetime.now().isoformat(timespec="seconds")
         print(f"\n[POLL #{poll_count}] {now}")
 
-        # Fetch latest configs (get_valid_token handles refresh automatically)
         current = fetch_configs()
 
         if current is None:
@@ -347,16 +360,14 @@ def main():
             time.sleep(POLL_INTERVAL)
             continue
 
-        print(f"[POLL] Fetched {len(current)} configs")
+        print(f"[POLL] Fetched {len(current)} configs (full detail)")
 
         if is_first_run:
-            # First run — just save baseline, don't alert
             save_snapshot(current)
             snapshot = current
             is_first_run = False
             print("[SNAPSHOT] Baseline established — monitoring starts next poll")
         else:
-            # Diff against snapshot
             changed = find_changes(snapshot, current)
 
             if changed:
@@ -368,11 +379,9 @@ def main():
                     for c in item["changes"]:
                         print(f"    {c['field']}: {c['old']}  →  {c['new']}")
 
-                # Send email
                 subject, body = build_email_body(changed, ts)
                 sent = send_email(subject, body)
 
-                # Log the event
                 log_entries = [{
                     "ts":        ts,
                     "level":     "change",
@@ -383,7 +392,6 @@ def main():
                 }]
                 append_log(log_entries)
 
-                # Update snapshot to current state
                 snapshot = current
                 save_snapshot(current)
                 total_alerts += 1
@@ -391,7 +399,6 @@ def main():
             else:
                 print("[POLL] No changes detected")
 
-        # Wait before next poll
         elapsed = time.time() - start_time
         remaining = RUN_DURATION - elapsed
         wait = min(POLL_INTERVAL, remaining)
