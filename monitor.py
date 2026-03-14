@@ -271,49 +271,51 @@ def truncate(value: str, max_len: int = MAX_FIELD_LEN) -> str:
     s = str(value)
     if len(s) <= max_len:
         return s
-    return s[:max_len] + f"… [+{len(s) - max_len} chars]"
+    return s[:max_len] + f"... [+{len(s) - max_len} more chars]"
 
 
-# EMAIL
 def build_email_body(changed_configs: list, ts: str) -> tuple:
-    subject = (
-        f"[VertexWatch] {len(changed_configs)} config(s) changed"
-        f" — {ts}"
-    )
+    subject = f"[VertexWatch] {len(changed_configs)} config(s) changed — {ts}"
 
-    body  = f"VERTEXWATCH — CONFIG CHANGE ALERT\n{'━' * 54}\n\n"
-    body += f"Endpoint  : {GET_ALL_URL}\n"
-    body += f"Timestamp : {ts}\n"
-    body += f"Changes   : {len(changed_configs)} config(s) modified\n\n"
+    body  = "=" * 60 + "\n"
+    body += "  VERTEXWATCH — CONFIG CHANGE ALERT\n"
+    body += "=" * 60 + "\n\n"
+    body += f"  Endpoint  : {GET_ALL_URL}\n"
+    body += f"  Timestamp : {ts}\n"
+    body += f"  Total     : {len(changed_configs)} config(s) changed\n\n"
 
-    for item in changed_configs:
+    for idx, item in enumerate(changed_configs, 1):
         event = item.get("event", "MODIFIED")
-        body += f"{'─' * 40}\n"
-        body += f"  Config ID : {item['configId']}\n"
-        body += f"  Version   : {item['version']}\n"
-        body += f"  Type      : {item['type']}\n"
-        body += f"  Event     : {event}\n"
+        event_icon = {"MODIFIED": "[~]", "ADDED": "[+]", "REMOVED": "[-]"}.get(event, "[?]")
+
+        body += "-" * 60 + "\n"
+        body += f"  {event_icon} Config #{item['configId']}  |  {item['type']}  |  {item['version']}  |  {event}\n"
+        body += "-" * 60 + "\n"
 
         if item["changes"]:
             for c in item["changes"]:
-                field = c["field"].replace("generationConfig.", "gc.")
-                old_val = str(c["old"])
-                new_val = str(c["new"])
+                field    = c["field"].replace("generationConfig.", "gc.")
+                old_val  = str(c["old"])
+                new_val  = str(c["new"])
+                is_long  = len(old_val) > MAX_FIELD_LEN or len(new_val) > MAX_FIELD_LEN
 
-                body += f"\n  ┌─ Field  : {field}\n"
+                body += f"\n  Field  : {field}\n"
 
-                if len(old_val) > MAX_FIELD_LEN or len(new_val) > MAX_FIELD_LEN:
-                    body += f"  ├─ Before : ({len(old_val)} chars) {truncate(old_val)}\n"
-                    body += f"  └─ After  : ({len(new_val)} chars) {truncate(new_val)}\n"
+                if is_long:
+                    body += f"  Before : ({len(old_val)} chars)\n"
+                    body += f"           {truncate(old_val)}\n"
+                    body += f"  After  : ({len(new_val)} chars)\n"
+                    body += f"           {truncate(new_val)}\n"
                 else:
-                    body += f"  ├─ Before : {old_val}\n"
-                    body += f"  └─ After  : {new_val}\n"
+                    body += f"  Before : {old_val}\n"
+                    body += f"  After  : {new_val}\n"
 
         body += "\n"
 
-    body += f"{'━' * 54}\n"
-    body += "Sent by VertexWatch — GitHub Actions Monitor\n"
-    body += f"Run: https://github.com/${{GITHUB_REPOSITORY}}/actions"
+    body += "=" * 60 + "\n"
+    body += "  Sent by VertexWatch — GitHub Actions Monitor\n"
+    body += f"  Run : https://github.com/${{GITHUB_REPOSITORY}}/actions\n"
+    body += "=" * 60 + "\n"
 
     return subject, body
 
