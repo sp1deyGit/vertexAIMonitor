@@ -1,14 +1,14 @@
 name: VertexWatch
 
 on:
-  workflow_dispatch:        # manual trigger
+  workflow_dispatch:
   schedule:
-    - cron: "*/3 * * * *"  # every 5 minutes (optional, remove if not needed)
+    - cron: "*/5 * * * *"
 
 jobs:
-  monitor:
-    runs-on: ubuntu-latest
 
+  monitor-dev:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -25,24 +25,68 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            snapshot.json
-            change_log.json
-          key: vertexwatch-${{ github.run_id }}
+            snapshot_dev.json
+            change_log_dev.json
+          key: vertexwatch-dev-${{ github.run_id }}
           restore-keys: |
-            vertexwatch-
+            vertexwatch-dev-
 
-      - name: Run monitor
+      - name: Run monitor (dev)
         env:
-          SUPER_USERNAME: ${{ secrets.SUPER_USERNAME }}
-          SUPER_PASSWORD: ${{ secrets.SUPER_PASSWORD }}
+          ENV_TARGET:    dev
+          DEV_USERNAME:  ${{ secrets.DEV_USERNAME }}
+          DEV_PASSWORD:  ${{ secrets.DEV_PASSWORD }}
+          GMAIL_USER:    ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_EMAIL:   ${{ secrets.ALERT_EMAIL }}
+        run: python monitor.py
+
+      - name: Upload dev logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-dev
+          path: change_log_dev.json
+          if-no-files-found: ignore
+
+  monitor-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            snapshot_prod.json
+            change_log_prod.json
+          key: vertexwatch-prod-${{ github.run_id }}
+          restore-keys: |
+            vertexwatch-prod-
+
+      - name: Run monitor (prod)
+        env:
+          ENV_TARGET:     prod
+          PROD_USERNAME:  ${{ secrets.PROD_USERNAME }}
+          PROD_PASSWORD:  ${{ secrets.PROD_PASSWORD }}
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
 
-      - name: Upload logs
+      - name: Upload prod logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vertexwatch-logs
-          path: change_log.json
+          name: logs-prod
+          path: change_log_prod.json
+          if-no-files-found: ignore
