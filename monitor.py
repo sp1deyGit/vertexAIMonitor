@@ -265,6 +265,14 @@ def append_log(entries: list):
     with open(LOG_FILE, "w") as f:
         json.dump(combined[:500], f, indent=2, default=str)
 
+MAX_FIELD_LEN = 200
+
+def truncate(value: str, max_len: int = MAX_FIELD_LEN) -> str:
+    s = str(value)
+    if len(s) <= max_len:
+        return s
+    return s[:max_len] + f"… [+{len(s) - max_len} chars]"
+
 
 # EMAIL
 def build_email_body(changed_configs: list, ts: str) -> tuple:
@@ -287,11 +295,20 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
         body += f"  Event     : {event}\n"
 
         if item["changes"]:
-            body += f"\n  {'Field':<42}  {'Before':<20}  After\n"
-            body += f"  {'─'*42}  {'─'*20}  {'─'*20}\n"
             for c in item["changes"]:
                 field = c["field"].replace("generationConfig.", "gc.")
-                body += f"  {field:<42}  {str(c['old']):<20}  {c['new']}\n"
+                old_val = str(c["old"])
+                new_val = str(c["new"])
+
+                body += f"\n  ┌─ Field  : {field}\n"
+
+                if len(old_val) > MAX_FIELD_LEN or len(new_val) > MAX_FIELD_LEN:
+                    body += f"  ├─ Before : ({len(old_val)} chars) {truncate(old_val)}\n"
+                    body += f"  └─ After  : ({len(new_val)} chars) {truncate(new_val)}\n"
+                else:
+                    body += f"  ├─ Before : {old_val}\n"
+                    body += f"  └─ After  : {new_val}\n"
+
         body += "\n"
 
     body += f"{'━' * 54}\n"
@@ -299,7 +316,6 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
     body += f"Run: https://github.com/${{GITHUB_REPOSITORY}}/actions"
 
     return subject, body
-
 
 def send_email(subject: str, body: str) -> bool:
     if not all([SMTP_USER, SMTP_PASS, ALERT_EMAIL]):
