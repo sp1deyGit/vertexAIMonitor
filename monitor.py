@@ -1,9 +1,11 @@
+import difflib
 import json
 import os
 import smtplib
 import sys
 import time
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
@@ -155,7 +157,6 @@ def fetch_configs() -> Optional[dict]:
                 result[cid] = full
                 print(f"[FETCH] Config #{cid} ({full.get('type', '?')}) fetched")
             else:
-                # Fallback to summary data if detail fetch fails
                 result[cid] = c
                 print(f"[FETCH] Config #{cid} — detail fetch failed, using summary")
 
@@ -265,71 +266,137 @@ def append_log(entries: list):
     with open(LOG_FILE, "w") as f:
         json.dump(combined[:500], f, indent=2, default=str)
 
-MAX_FIELD_LEN = 200
 
-def truncate(value: str, max_len: int = MAX_FIELD_LEN) -> str:
-    s = str(value)
-    if len(s) <= max_len:
-        return s
-    return s[:max_len] + f"... [+{len(s) - max_len} more chars]"
+# EMAIL
+def inline_diff(old: str, new: str) -> tuple:
+    """Returns (old_html, new_html) with only changed characters highlighted inline."""
+    matcher  = difflib.SequenceMatcher(None, old, new)
+    old_html = ""
+    new_html = ""
+
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        old_chunk = old[i1:i2].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        new_chunk = new[j1:j2].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        if op == "equal":
+            old_html += old_chunk
+            new_html += new_chunk
+        elif op == "replace":
+            old_html += f'<mark style="background:#ffb3b3;color:#900;border-radius:2px;padding:0 1px;">{old_chunk}</mark>'
+            new_html += f'<mark style="background:#b3ffb3;color:#060;border-radius:2px;padding:0 1px;">{new_chunk}</mark>'
+        elif op == "delete":
+            old_html += f'<mark style="background:#ffb3b3;color:#900;border-radius:2px;padding:0 1px;">{old_chunk}</mark>'
+        elif op == "insert":
+            new_html += f'<mark style="background:#b3ffb3;color:#060;border-radius:2px;padding:0 1px;">{new_chunk}</mark>'
+
+    return old_html, new_html
 
 
 def build_email_body(changed_configs: list, ts: str) -> tuple:
     subject = f"[VertexWatch] {len(changed_configs)} config(s) changed — {ts}"
 
-    body  = "=" * 60 + "\n"
-    body += "  VERTEXWATCH — CONFIG CHANGE ALERT\n"
-    body += "=" * 60 + "\n\n"
-    body += f"  Endpoint  : {GET_ALL_URL}\n"
-    body += f"  Timestamp : {ts}\n"
-    body += f"  Total     : {len(changed_configs)} config(s) changed\n\n"
+    html = f"""
+    <html><body style="font-family:monospace;font-size:13px;background:#f4f4f4;padding:20px;margin:0;">
+    <div style="max-width:960px;margin:auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.12);">
 
-    for idx, item in enumerate(changed_configs, 1):
-        event = item.get("event", "MODIFIED")
-        event_icon = {"MODIFIED": "[~]", "ADDED": "[+]", "REMOVED": "[-]"}.get(event, "[?]")
+      <!-- HEADER -->
+      <div style="background:#1a1a2e;color:#fff;padding:20px 30px;">
+        <h2 style="margin:0;font-size:18px;letter-spacing:0.5px;">&#128269; VertexWatch — Config Change Alert</h2>
+        <p style="margin:8px 0 0;color:#aaa;font-size:12px;">
+          {ts} &nbsp;|&nbsp; {len(changed_configs)} config(s) changed &nbsp;|&nbsp;
+          <a href="{GET_ALL_URL}" style="color:#7eb8f7;text-decoration:none;">API Endpoint</a>
+        </p>
+      </div>
+    """
 
-        body += "-" * 60 + "\n"
-        body += f"  {event_icon} Config #{item['configId']}  |  {item['type']}  |  {item['version']}  |  {event}\n"
-        body += "-" * 60 + "\n"
+    event_colors = {
+        "MODIFIED": ("#fff3cd", "#856404", "~"),
+        "ADDED":    ("#d4edda", "#155724", "+"),
+        "REMOVED":  ("#f8d7da", "#721c24", "-"),
+    }
+
+    for item in changed_configs:
+        event        = item.get("event", "MODIFIED")
+        bg, fg, icon = event_colors.get(event, ("#fff", "#000", "?"))
+
+        html += f"""
+      <div style="margin:24px 30px 0;">
+
+        <!-- CONFIG HEADER -->
+        <div style="background:{bg};color:{fg};padding:10px 16px;border-radius:6px 6px 0 0;font-weight:bold;font-size:13px;">
+          [{icon}] Config #{item['configId']} &nbsp;|&nbsp; {item['type']} &nbsp;|&nbsp; {item['version']} &nbsp;|&nbsp; {event}
+        </div>
+
+        <!-- CHANGES TABLE -->
+        <table style="width:100%;border-collapse:collapse;border:1px solid #ddd;border-top:none;table-layout:fixed;">
+          <colgroup>
+            <col style="width:18%;">
+            <col style="width:41%;">
+            <col style="width:41%;">
+          </colgroup>
+          <thead>
+            <tr style="background:#f0f0f0;">
+              <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;">Field</th>
+              <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;background:#fff5f5;">&#8592; Before</th>
+              <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;background:#f5fff5;">After &#8594;</th>
+            </tr>
+          </thead>
+          <tbody>
+        """
 
         if item["changes"]:
             for c in item["changes"]:
-                field    = c["field"].replace("generationConfig.", "gc.")
-                old_val  = str(c["old"])
-                new_val  = str(c["new"])
-                is_long  = len(old_val) > MAX_FIELD_LEN or len(new_val) > MAX_FIELD_LEN
+                field   = c["field"].replace("generationConfig.", "gc.")
+                old_val = str(c["old"])
+                new_val = str(c["new"])
+                old_html, new_html = inline_diff(old_val, new_val)
 
-                body += f"\n  Field  : {field}\n"
+                html += f"""
+            <tr>
+              <td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;vertical-align:top;font-size:12px;word-break:break-word;">{field}</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;background:#fff8f8;white-space:pre-wrap;word-break:break-word;vertical-align:top;font-size:12px;line-height:1.6;">{old_html}</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;background:#f8fff8;white-space:pre-wrap;word-break:break-word;vertical-align:top;font-size:12px;line-height:1.6;">{new_html}</td>
+            </tr>
+                """
+        else:
+            html += """
+            <tr>
+              <td colspan="3" style="padding:8px 12px;border:1px solid #ddd;color:#888;font-size:12px;">No field-level changes recorded.</td>
+            </tr>
+            """
 
-                if is_long:
-                    body += f"  Before : ({len(old_val)} chars)\n"
-                    body += f"           {truncate(old_val)}\n"
-                    body += f"  After  : ({len(new_val)} chars)\n"
-                    body += f"           {truncate(new_val)}\n"
-                else:
-                    body += f"  Before : {old_val}\n"
-                    body += f"  After  : {new_val}\n"
+        html += """
+          </tbody>
+        </table>
+      </div>
+        """
 
-        body += "\n"
+    html += f"""
+      <!-- FOOTER -->
+      <div style="margin:30px;padding-top:16px;border-top:1px solid #eee;color:#aaa;font-size:11px;">
+        Sent by <strong>VertexWatch</strong> — GitHub Actions Monitor &nbsp;|&nbsp;
+        <a href="https://github.com/${{GITHUB_REPOSITORY}}/actions" style="color:#7eb8f7;text-decoration:none;">View Run &#8599;</a>
+      </div>
 
-    body += "=" * 60 + "\n"
-    body += "  Sent by VertexWatch — GitHub Actions Monitor\n"
-    body += f"  Run : https://github.com/${{GITHUB_REPOSITORY}}/actions\n"
-    body += "=" * 60 + "\n"
+    </div>
+    </body></html>
+    """
 
-    return subject, body
+    return subject, html
 
-def send_email(subject: str, body: str) -> bool:
+
+def send_email(subject: str, html_body: str) -> bool:
     if not all([SMTP_USER, SMTP_PASS, ALERT_EMAIL]):
         print("[EMAIL] Gmail credentials not configured — skipping alert")
         return False
 
     recipients = [e.strip() for e in ALERT_EMAIL.split(",") if e.strip()]
 
-    msg = MIMEText(body)
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = SMTP_USER
     msg["To"]      = ", ".join(recipients)
+    msg.attach(MIMEText(html_body, "html"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
@@ -397,8 +464,8 @@ def main():
                     for c in item["changes"]:
                         print(f"    {c['field']}: {c['old']}  →  {c['new']}")
 
-                subject, body = build_email_body(changed, ts)
-                sent = send_email(subject, body)
+                subject, html_body = build_email_body(changed, ts)
+                sent = send_email(subject, html_body)
 
                 log_entries = [{
                     "ts":        ts,
