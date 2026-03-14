@@ -339,12 +339,14 @@ LONG_TEXT_FIELDS = {"systemInstruction", "userInstruction"}
 
 # EMAIL
 def inline_diff(old: str, new: str, field: str = "") -> tuple:
-    # Format long text fields before diffing
+    """Returns (old_html, new_html) with only changed characters highlighted inline."""
     if field in LONG_TEXT_FIELDS:
         old = format_instruction_text(old)
         new = format_instruction_text(new)
 
     matcher  = difflib.SequenceMatcher(None, old, new)
+    old_html = ""
+    new_html = ""
 
     for op, i1, i2, j1, j2 in matcher.get_opcodes():
         old_chunk = old[i1:i2].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
