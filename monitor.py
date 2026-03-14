@@ -11,20 +11,50 @@ from typing import Optional
 
 import requests
 
-# CONSTANTS
-LOGIN_URL      = "https://api.dev.eka.io/support/auth/token"
-REFRESH_URL    = "https://api.dev.eka.io/support/auth/token/refresh"
-GET_ALL_URL    = "https://api.dev.eka.io/support/vertexAi/getAllConfigs"
-GET_ONE_URL    = "https://api.dev.eka.io/support/vertexAi/getConfig"
-SNAPSHOT_FILE  = "snapshot.json"
-LOG_FILE       = "change_log.json"
+# ENVIRONMENT TARGET — set via ENV_TARGET secret ("dev" or "prod")
+ENV_TARGET = os.environ.get("ENV_TARGET", "dev")
 
-POLL_INTERVAL  = 10
-RUN_DURATION   = 120
+ENV_CONFIG = {
+    "dev": {
+        "LOGIN_URL":     "https://api.dev.eka.io/support/auth/token",
+        "REFRESH_URL":   "https://api.dev.eka.io/support/auth/token/refresh",
+        "GET_ALL_URL":   "https://api.dev.eka.io/support/vertexAi/getAllConfigs",
+        "GET_ONE_URL":   "https://api.dev.eka.io/support/vertexAi/getConfig",
+        "USERNAME":      os.environ.get("DEV_USERNAME", ""),
+        "PASSWORD":      os.environ.get("DEV_PASSWORD", ""),
+        "SNAPSHOT_FILE": "snapshot_dev.json",
+        "LOG_FILE":      "change_log_dev.json",
+    },
+    "prod": {
+        "LOGIN_URL":     "https://heimdall.eka.io/support/auth/token",
+        "REFRESH_URL":   "https://heimdall.eka.io/support/auth/token/refresh",
+        "GET_ALL_URL":   "https://heimdall.eka.io/support/vertexAi/getAllConfigs",
+        "GET_ONE_URL":   "https://heimdall.eka.io/support/vertexAi/getConfig",
+        "USERNAME":      os.environ.get("PROD_USERNAME", ""),
+        "PASSWORD":      os.environ.get("PROD_PASSWORD", ""),
+        "SNAPSHOT_FILE": "snapshot_prod.json",
+        "LOG_FILE":      "change_log_prod.json",
+    },
+}
 
-# ENV
-USERNAME    = os.environ.get("SUPER_USERNAME", "")
-PASSWORD    = os.environ.get("SUPER_PASSWORD", "")
+if ENV_TARGET not in ENV_CONFIG:
+    print(f"[FATAL] Unknown ENV_TARGET: '{ENV_TARGET}' — must be 'dev' or 'prod'")
+    sys.exit(1)
+
+cfg          = ENV_CONFIG[ENV_TARGET]
+LOGIN_URL    = cfg["LOGIN_URL"]
+REFRESH_URL  = cfg["REFRESH_URL"]
+GET_ALL_URL  = cfg["GET_ALL_URL"]
+GET_ONE_URL  = cfg["GET_ONE_URL"]
+USERNAME     = cfg["USERNAME"]
+PASSWORD     = cfg["PASSWORD"]
+SNAPSHOT_FILE = cfg["SNAPSHOT_FILE"]
+LOG_FILE     = cfg["LOG_FILE"]
+
+POLL_INTERVAL = 10
+RUN_DURATION  = 120
+
+# ENV — shared
 SMTP_USER   = os.environ.get("GMAIL_USER", "")
 SMTP_PASS   = os.environ.get("GMAIL_APP_PASS", "")
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")
@@ -56,7 +86,7 @@ _session = AuthSession()
 # LOGIN
 def login() -> Optional[str]:
     if not USERNAME or not PASSWORD:
-        print("[ERROR] SUPER_USERNAME / SUPER_PASSWORD not set in GitHub secrets")
+        print(f"[ERROR] {ENV_TARGET.upper()}_USERNAME / {ENV_TARGET.upper()}_PASSWORD not set in GitHub secrets")
         return None
 
     try:
@@ -151,7 +181,7 @@ def fetch_configs() -> Optional[dict]:
 
         result = {}
         for c in configs:
-            cid = str(c["id"])
+            cid  = str(c["id"])
             full = fetch_config_by_id(cid)
             if full:
                 result[cid] = full
@@ -293,7 +323,8 @@ def inline_diff(old: str, new: str) -> tuple:
 
 
 def build_email_body(changed_configs: list, ts: str) -> tuple:
-    subject = f"[VertexWatch] {len(changed_configs)} config(s) changed — {ts}"
+    env_label = "PRODUCTION 🔴" if ENV_TARGET == "prod" else "DEV 🟡"
+    subject   = f"[VertexWatch][{ENV_TARGET.upper()}] {len(changed_configs)} config(s) changed — {ts}"
 
     html = f"""
     <html><body style="font-family:monospace;font-size:13px;background:#f4f4f4;padding:20px;margin:0;">
@@ -302,9 +333,11 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
       <!-- HEADER -->
       <div style="background:#1a1a2e;color:#fff;padding:20px 30px;">
         <h2 style="margin:0;font-size:18px;letter-spacing:0.5px;">&#128269; VertexWatch — Config Change Alert</h2>
-        <p style="margin:8px 0 0;color:#aaa;font-size:12px;">
-          {ts} &nbsp;|&nbsp; {len(changed_configs)} config(s) changed &nbsp;|&nbsp;
-          <a href="{GET_ALL_URL}" style="color:#7eb8f7;text-decoration:none;">API Endpoint</a>
+        <p style="margin:6px 0 0;color:#aaa;font-size:12px;">
+          Environment: <strong style="color:#fff;">{env_label}</strong>
+          &nbsp;|&nbsp; {ts}
+          &nbsp;|&nbsp; {len(changed_configs)} config(s) changed
+          &nbsp;|&nbsp; <a href="{GET_ALL_URL}" style="color:#7eb8f7;text-decoration:none;">API Endpoint</a>
         </p>
       </div>
     """
@@ -321,13 +354,9 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
 
         html += f"""
       <div style="margin:24px 30px 0;">
-
-        <!-- CONFIG HEADER -->
         <div style="background:{bg};color:{fg};padding:10px 16px;border-radius:6px 6px 0 0;font-weight:bold;font-size:13px;">
           [{icon}] Config #{item['configId']} &nbsp;|&nbsp; {item['type']} &nbsp;|&nbsp; {item['version']} &nbsp;|&nbsp; {event}
         </div>
-
-        <!-- CHANGES TABLE -->
         <table style="width:100%;border-collapse:collapse;border:1px solid #ddd;border-top:none;table-layout:fixed;">
           <colgroup>
             <col style="width:18%;">
@@ -346,9 +375,9 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
 
         if item["changes"]:
             for c in item["changes"]:
-                field   = c["field"].replace("generationConfig.", "gc.")
-                old_val = str(c["old"])
-                new_val = str(c["new"])
+                field    = c["field"].replace("generationConfig.", "gc.")
+                old_val  = str(c["old"])
+                new_val  = str(c["new"])
                 old_html, new_html = inline_diff(old_val, new_val)
 
                 html += f"""
@@ -372,12 +401,10 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
         """
 
     html += f"""
-      <!-- FOOTER -->
       <div style="margin:30px;padding-top:16px;border-top:1px solid #eee;color:#aaa;font-size:11px;">
         Sent by <strong>VertexWatch</strong> — GitHub Actions Monitor &nbsp;|&nbsp;
         <a href="https://github.com/${{GITHUB_REPOSITORY}}/actions" style="color:#7eb8f7;text-decoration:none;">View Run &#8599;</a>
       </div>
-
     </div>
     </body></html>
     """
@@ -414,14 +441,15 @@ def send_email(subject: str, html_body: str) -> bool:
 
 # MAIN POLL LOOP
 def main():
-    print(f"[START] VertexWatch — {datetime.now().isoformat()}")
+    print(f"[START] VertexWatch [{ENV_TARGET.upper()}] — {datetime.now().isoformat()}")
     print(f"[START] Polling every {POLL_INTERVAL}s for {RUN_DURATION}s")
+    print(f"[START] Endpoint: {GET_ALL_URL}")
 
     if not login():
-        print("[FATAL] Cannot authenticate — check SUPER_USERNAME / SUPER_PASSWORD secrets")
+        print(f"[FATAL] Cannot authenticate — check {ENV_TARGET.upper()}_USERNAME / {ENV_TARGET.upper()}_PASSWORD secrets")
         sys.exit(1)
 
-    snapshot = load_snapshot()
+    snapshot     = load_snapshot()
     is_first_run = not snapshot
 
     if is_first_run:
@@ -429,8 +457,8 @@ def main():
     else:
         print(f"[SNAPSHOT] Loaded {len(snapshot)} configs from cache")
 
-    start_time = time.time()
-    poll_count = 0
+    start_time   = time.time()
+    poll_count   = 0
     total_alerts = 0
 
     while (time.time() - start_time) < RUN_DURATION:
@@ -449,7 +477,7 @@ def main():
 
         if is_first_run:
             save_snapshot(current)
-            snapshot = current
+            snapshot     = current
             is_first_run = False
             print("[SNAPSHOT] Baseline established — monitoring starts next poll")
         else:
@@ -469,6 +497,7 @@ def main():
 
                 log_entries = [{
                     "ts":        ts,
+                    "env":       ENV_TARGET,
                     "level":     "change",
                     "message":   f"{len(changed)} config(s) changed",
                     "configs":   changed,
@@ -484,9 +513,9 @@ def main():
             else:
                 print("[POLL] No changes detected")
 
-        elapsed = time.time() - start_time
+        elapsed   = time.time() - start_time
         remaining = RUN_DURATION - elapsed
-        wait = min(POLL_INTERVAL, remaining)
+        wait      = min(POLL_INTERVAL, remaining)
         if wait > 0:
             print(f"[POLL] Waiting {int(wait)}s… ({int(remaining)}s remaining in run)")
             time.sleep(wait)
