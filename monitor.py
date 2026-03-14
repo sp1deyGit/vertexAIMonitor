@@ -296,13 +296,55 @@ def append_log(entries: list):
     with open(LOG_FILE, "w") as f:
         json.dump(combined[:500], f, indent=2, default=str)
 
+def format_instruction_text(raw: str) -> str:
+    """Use Groq (free) to reformat raw instruction text into clean readable format."""
+    if len(raw) < 100 or raw == "(not set)":
+        return raw
+
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        print("[FORMAT] GROQ_API_KEY not set — skipping formatting")
+        return raw
+
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model":      "llama-3.1-8b-instant",  # free, fast
+                "max_tokens": 2048,
+                "messages": [
+                    {
+                        "role":    "system",
+                        "content": "You are a text formatter. Reformat the given raw text into clean, readable format with proper line breaks, bullet points where appropriate, and clear section headers if present. Return only the reformatted text, no commentary."
+                    },
+                    {
+                        "role":    "user",
+                        "content": f"Reformat this instruction text:\n\n{raw}"
+                    }
+                ],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"[FORMAT] Groq formatting failed ({e}) — using raw text")
+        return raw
+
+LONG_TEXT_FIELDS = {"systemInstruction", "userInstruction"}
 
 # EMAIL
-def inline_diff(old: str, new: str) -> tuple:
-    """Returns (old_html, new_html) with only changed characters highlighted inline."""
+def inline_diff(old: str, new: str, field: str = "") -> tuple:
+    # Format long text fields before diffing
+    if field in LONG_TEXT_FIELDS:
+        old = format_instruction_text(old)
+        new = format_instruction_text(new)
+
     matcher  = difflib.SequenceMatcher(None, old, new)
-    old_html = ""
-    new_html = ""
 
     for op, i1, i2, j1, j2 in matcher.get_opcodes():
         old_chunk = old[i1:i2].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -378,7 +420,7 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
                 field    = c["field"].replace("generationConfig.", "gc.")
                 old_val  = str(c["old"])
                 new_val  = str(c["new"])
-                old_html, new_html = inline_diff(old_val, new_val)
+                old_html, new_html = inline_diff(old_val, new_val, field=c["field"])
 
                 html += f"""
             <tr>
