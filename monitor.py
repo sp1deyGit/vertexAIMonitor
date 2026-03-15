@@ -8,11 +8,12 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
-
-import requests
+from datetime import datetime, timezone, timedelta
 
 # ENVIRONMENT TARGET — set via ENV_TARGET secret ("dev" or "prod")
 ENV_TARGET = os.environ.get("ENV_TARGET", "dev")
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 ENV_CONFIG = {
     "dev": {
@@ -164,6 +165,10 @@ def fetch_config_by_id(config_id: str) -> Optional[dict]:
         print(f"[ERROR] getConfig/{config_id} failed: {e}")
         return None
 
+
+def now_ist() -> str:
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+import requests
 
 def fetch_configs() -> Optional[dict]:
     token = get_valid_token()
