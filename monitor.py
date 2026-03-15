@@ -533,7 +533,7 @@ def main():
             changed = find_changes(snapshot, current)
 
             if changed:
-                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                ts = now_ist()
                 print(f"[CHANGE] {len(changed)} config(s) changed!")
                 for item in changed:
                     print(f"  → Config #{item['configId']} ({item['version']}) "
