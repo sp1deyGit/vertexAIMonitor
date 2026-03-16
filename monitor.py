@@ -4,11 +4,11 @@ import os
 import smtplib
 import sys
 import time
-from datetime import datetime
+import requests
+from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
-from datetime import datetime, timezone, timedelta
 
 # ENVIRONMENT TARGET — set via ENV_TARGET secret ("dev" or "prod")
 ENV_TARGET = os.environ.get("ENV_TARGET", "dev")
@@ -42,15 +42,15 @@ if ENV_TARGET not in ENV_CONFIG:
     print(f"[FATAL] Unknown ENV_TARGET: '{ENV_TARGET}' — must be 'dev' or 'prod'")
     sys.exit(1)
 
-cfg          = ENV_CONFIG[ENV_TARGET]
-LOGIN_URL    = cfg["LOGIN_URL"]
-REFRESH_URL  = cfg["REFRESH_URL"]
-GET_ALL_URL  = cfg["GET_ALL_URL"]
-GET_ONE_URL  = cfg["GET_ONE_URL"]
-USERNAME     = cfg["USERNAME"]
-PASSWORD     = cfg["PASSWORD"]
+cfg           = ENV_CONFIG[ENV_TARGET]
+LOGIN_URL     = cfg["LOGIN_URL"]
+REFRESH_URL   = cfg["REFRESH_URL"]
+GET_ALL_URL   = cfg["GET_ALL_URL"]
+GET_ONE_URL   = cfg["GET_ONE_URL"]
+USERNAME      = cfg["USERNAME"]
+PASSWORD      = cfg["PASSWORD"]
 SNAPSHOT_FILE = cfg["SNAPSHOT_FILE"]
-LOG_FILE     = cfg["LOG_FILE"]
+LOG_FILE      = cfg["LOG_FILE"]
 
 POLL_INTERVAL = 10
 RUN_DURATION  = 120
@@ -59,6 +59,13 @@ RUN_DURATION  = 120
 SMTP_USER   = os.environ.get("GMAIL_USER", "")
 SMTP_PASS   = os.environ.get("GMAIL_APP_PASS", "")
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")
+
+LONG_TEXT_FIELDS = {"systemInstruction", "userInstruction"}
+
+
+# TIMEZONE
+def now_ist() -> str:
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
 # AUTH STATE
@@ -166,10 +173,6 @@ def fetch_config_by_id(config_id: str) -> Optional[dict]:
         return None
 
 
-def now_ist() -> str:
-    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
-import requests
-
 def fetch_configs() -> Optional[dict]:
     token = get_valid_token()
     if not token:
@@ -185,6 +188,8 @@ def fetch_configs() -> Optional[dict]:
         configs = body.get("data", [])
 
         result = {}
+        failed = []
+
         for c in configs:
             cid  = str(c["id"])
             full = fetch_config_by_id(cid)
@@ -192,8 +197,12 @@ def fetch_configs() -> Optional[dict]:
                 result[cid] = full
                 print(f"[FETCH] Config #{cid} ({full.get('type', '?')}) fetched")
             else:
-                result[cid] = c
-                print(f"[FETCH] Config #{cid} — detail fetch failed, using summary")
+                failed.append(cid)
+                print(f"[FETCH] Config #{cid} — detail fetch failed")
+
+        if failed:
+            print(f"[WARN] {len(failed)} config(s) failed to fetch: {failed} — aborting poll, no diff will run")
+            return None
 
         return result
 
@@ -301,6 +310,8 @@ def append_log(entries: list):
     with open(LOG_FILE, "w") as f:
         json.dump(combined[:500], f, indent=2, default=str)
 
+
+# FORMAT
 def format_instruction_text(raw: str) -> str:
     """Use Groq (free) to reformat raw instruction text into clean readable format."""
     if len(raw) < 100 or raw == "(not set)":
@@ -319,7 +330,7 @@ def format_instruction_text(raw: str) -> str:
                 "Content-Type":  "application/json",
             },
             json={
-                "model":      "llama-3.1-8b-instant",  # free, fast
+                "model":      "llama-3.1-8b-instant",
                 "max_tokens": 2048,
                 "messages": [
                     {
@@ -340,7 +351,6 @@ def format_instruction_text(raw: str) -> str:
         print(f"[FORMAT] Groq formatting failed ({e}) — using raw text")
         return raw
 
-LONG_TEXT_FIELDS = {"systemInstruction", "userInstruction"}
 
 # EMAIL
 def inline_diff(old: str, new: str, field: str = "") -> tuple:
@@ -490,7 +500,7 @@ def send_email(subject: str, html_body: str) -> bool:
 
 # MAIN POLL LOOP
 def main():
-    print(f"[START] VertexWatch [{ENV_TARGET.upper()}] — {datetime.now().isoformat()}")
+    print(f"[START] VertexWatch [{ENV_TARGET.upper()}] — {now_ist()}")
     print(f"[START] Polling every {POLL_INTERVAL}s for {RUN_DURATION}s")
     print(f"[START] Endpoint: {GET_ALL_URL}")
 
@@ -512,7 +522,7 @@ def main():
 
     while (time.time() - start_time) < RUN_DURATION:
         poll_count += 1
-        now = datetime.now().isoformat(timespec="seconds")
+        now = now_ist()
         print(f"\n[POLL #{poll_count}] {now}")
 
         current = fetch_configs()
