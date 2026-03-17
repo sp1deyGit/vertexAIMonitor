@@ -382,8 +382,8 @@ def inline_diff(old: str, new: str, field: str = "") -> tuple:
 
 
 def build_email_body(changed_configs: list, ts: str) -> tuple:
-    env_label = "PRODUCTION 🔴" if ENV_TARGET == "prod" else "DEV 🟡"
-    subject   = f"[VertexWatch][{ENV_TARGET.upper()}] {len(changed_configs)} config(s) changed — {ts}"
+    env_label = "PRODUCTION/UAT🔴" if ENV_TARGET == "prod" else "DEV 🟡"
+    subject   = f"OCR CONFIG CHANGE[{ENV_TARGET.upper()}] {len(changed_configs)} Version(s) changed"
 
     html = f"""
     <html><body style="font-family:monospace;font-size:13px;background:#f4f4f4;padding:20px;margin:0;">
