@@ -565,9 +565,13 @@ def main():
                 }]
                 append_log(log_entries)
 
-                snapshot = current
-                save_snapshot(current)
-                total_alerts += 1
+                if sent:
+                    # Only update snapshot if email was successfully sent
+                    snapshot = current
+                    save_snapshot(current)
+                    total_alerts += 1
+                else:
+                    print("[WARN] Email failed — snapshot NOT updated, will retry on next poll")
 
             else:
                 print("[POLL] No changes detected")
