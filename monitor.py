@@ -353,12 +353,57 @@ def format_instruction_text(raw: str) -> str:
 
 
 # EMAIL
-def inline_diff(old: str, new: str, field: str = "") -> tuple:
-    """Returns (old_html, new_html) with only changed characters highlighted inline."""
-    if field in LONG_TEXT_FIELDS:
-        old = format_instruction_text(old)
-        new = format_instruction_text(new)
+def ai_diff(old: str, new: str) -> tuple:
+    """Use Groq to semantically compare two texts and return highlighted HTML."""
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        print("[DIFF] GROQ_API_KEY not set — falling back to character diff")
+        return char_diff(old, new)
 
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model":      "llama-3.1-8b-instant",
+                "max_tokens": 8192,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are a precise text diff tool. You will be given two versions of a text (BEFORE and AFTER).
+Your job is to return a JSON object with two keys: "before_html" and "after_html".
+
+Rules:
+- Return the full text in both fields
+- Wrap REMOVED or CHANGED parts in BEFORE with: <mark style="background:#ffb3b3;color:#900;border-radius:2px;padding:0 1px;">text</mark>
+- Wrap ADDED or CHANGED parts in AFTER with: <mark style="background:#b3ffb3;color:#060;border-radius:2px;padding:0 1px;">text</mark>
+- Highlight at the sentence or phrase level, not character level
+- Preserve all line breaks using \\n
+- Return ONLY valid JSON, no explanation, no markdown fences"""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"BEFORE:\n{old}\n\nAFTER:\n{new}"
+                    }
+                ],
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"].strip()
+        parsed  = json.loads(content)
+        return parsed["before_html"], parsed["after_html"]
+
+    except Exception as e:
+        print(f"[DIFF] Groq diff failed ({e}) — falling back to character diff")
+        return char_diff(old, new)
+
+
+def char_diff(old: str, new: str) -> tuple:
+    """Fallback character-level diff using difflib."""
     matcher  = difflib.SequenceMatcher(None, old, new)
     old_html = ""
     new_html = ""
@@ -379,6 +424,13 @@ def inline_diff(old: str, new: str, field: str = "") -> tuple:
             new_html += f'<mark style="background:#b3ffb3;color:#060;border-radius:2px;padding:0 1px;">{new_chunk}</mark>'
 
     return old_html, new_html
+
+
+def inline_diff(old: str, new: str, field: str = "") -> tuple:
+    """Use AI diff for long text fields, char diff for everything else."""
+    if field in LONG_TEXT_FIELDS and len(old) + len(new) > 200:
+        return ai_diff(old, new)
+    return char_diff(old, new)
 
 
 def build_email_body(changed_configs: list, ts: str) -> tuple:
