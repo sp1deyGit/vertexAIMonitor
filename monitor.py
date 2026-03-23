@@ -509,13 +509,6 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
           </tbody>
         </table>
       </div>
-        """
-
-    html += f"""
-      <div style="margin:30px;padding-top:16px;border-top:1px solid #eee;color:#aaa;font-size:11px;">
-        Sent by <strong>VertexWatch</strong> — GitHub Actions Monitor &nbsp;|&nbsp;
-        <a href="https://github.com/${{GITHUB_REPOSITORY}}/actions" style="color:#7eb8f7;text-decoration:none;">View Run &#8599;</a>
-      </div>
     </div>
     </body></html>
     """
