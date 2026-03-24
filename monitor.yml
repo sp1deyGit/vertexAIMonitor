@@ -2,15 +2,13 @@ name: VertexWatch Monitor
 
 on:
   schedule:
-    # GitHub Actions minimum is every 5 minutes via cron.
-    # We run every 5 min and loop internally every 30s for near-realtime.
     - cron: '*/5 * * * *'
-  workflow_dispatch:   # allow manual trigger from GitHub UI
+  workflow_dispatch:  
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 6   # slightly over 5min window, catches full loop
+    timeout-minutes: 6 
 
     steps:
       - name: Checkout
