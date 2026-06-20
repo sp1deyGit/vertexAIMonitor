@@ -49,6 +49,92 @@ jobs:
           path: change_log_dev.json
           if-no-files-found: ignore
 
+
+  monitor-jkc-uat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            snapshot_jkc_uat.json
+            change_log_jkc_uat.json
+          key: vertexwatch-jkc-uat-${{ github.run_id }}
+          restore-keys: |
+            vertexwatch-jkc-uat-
+
+      - name: Run monitor (jkc-uat)
+        env:
+          ENV_TARGET:   jkc-uat
+          JKC_USERNAME: ${{ secrets.JKC_USERNAME }}
+          JKC_PASSWORD: ${{ secrets.JKC_PASSWORD }}
+          GMAIL_USER:   ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_EMAIL:  ${{ secrets.ALERT_EMAIL }}
+        run: python monitor.py
+
+      - name: Upload jkc-uat logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-jkc-uat
+          path: change_log_jkc_uat.json
+          if-no-files-found: ignore
+
+  monitor-jkc-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            snapshot_jkc_prod.json
+            change_log_jkc_prod.json
+          key: vertexwatch-jkc-prod-${{ github.run_id }}
+          restore-keys: |
+            vertexwatch-jkc-prod-
+
+      - name: Run monitor (jkc-prod)
+        env:
+          ENV_TARGET:   jkc-prod
+          JKC_USERNAME: ${{ secrets.JKC_USERNAME }}
+          JKC_PASSWORD: ${{ secrets.JKC_PASSWORD }}
+          GMAIL_USER:   ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_EMAIL:  ${{ secrets.ALERT_EMAIL }}
+        run: python monitor.py
+
+      - name: Upload jkc-prod logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-jkc-prod
+          path: change_log_jkc_prod.json
+          if-no-files-found: ignore
+
+          
   monitor-prod:
     runs-on: ubuntu-latest
     steps:
