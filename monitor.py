@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
-# ENVIRONMENT TARGET — set via ENV_TARGET secret ("dev" or "prod")
+# ENVIRONMENT TARGET — set via ENV_TARGET secret ("dev", "jkc-uat", "jkc-prod" or "prod")
 ENV_TARGET = os.environ.get("ENV_TARGET", "dev")
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -26,6 +26,26 @@ ENV_CONFIG = {
         "SNAPSHOT_FILE": "snapshot_dev.json",
         "LOG_FILE":      "change_log_dev.json",
     },
+    "jkc-uat": {
+        "LOGIN_URL":     "https://api-uat.jkyms.com/support/auth/token",
+        "REFRESH_URL":   "https://api-uat.jkyms.com/support/auth/token/refresh",
+        "GET_ALL_URL":   "https://api-uat.jkyms.com/support/vertexAi/getAllConfigs",
+        "GET_ONE_URL":   "https://api-uat.jkyms.com/support/vertexAi/getConfig",
+        "USERNAME":      os.environ.get("JKC_UAT_USERNAME", ""),
+        "PASSWORD":      os.environ.get("JKC_UAT_PASSWORD", ""),
+        "SNAPSHOT_FILE": "snapshot_jkc_uat.json",
+        "LOG_FILE":      "change_log_jkc_uat.json",
+    },
+    "jkc-prod": {
+        "LOGIN_URL":     "https://api.jkyms.com/support/auth/token",
+        "REFRESH_URL":   "https://api.jkyms.com/support/auth/token/refresh",
+        "GET_ALL_URL":   "https://api.jkyms.com/support/vertexAi/getAllConfigs",
+        "GET_ONE_URL":   "https://api.jkyms.com/support/vertexAi/getConfig",
+        "USERNAME":      os.environ.get("JKC_PROD_USERNAME", ""),
+        "PASSWORD":      os.environ.get("JKC_PROD_PASSWORD", ""),
+        "SNAPSHOT_FILE": "snapshot_jkc_prod.json",
+        "LOG_FILE":      "change_log_jkc_prod.json",
+    },
     "prod": {
         "LOGIN_URL":     "https://heimdall.eka.io/support/auth/token",
         "REFRESH_URL":   "https://heimdall.eka.io/support/auth/token/refresh",
@@ -39,7 +59,7 @@ ENV_CONFIG = {
 }
 
 if ENV_TARGET not in ENV_CONFIG:
-    print(f"[FATAL] Unknown ENV_TARGET: '{ENV_TARGET}' — must be 'dev' or 'prod'")
+    print(f"[FATAL] Unknown ENV_TARGET: '{ENV_TARGET}' — must be 'dev', 'jkc-uat', 'jkc-prod' or 'prod'")
     sys.exit(1)
 
 cfg           = ENV_CONFIG[ENV_TARGET]
@@ -335,7 +355,7 @@ def format_instruction_text(raw: str) -> str:
                 "messages": [
                     {
                         "role":    "system",
-                        "content": "You are a text formatter. Reformat the given raw text into clean, readable format with proper line breaks, bullet points where appropriate, and clear section headers if present. Return only the reformatted text, no commentary."
+                        "content": "You are a text formatter. Reformat the given raw text into clean, readable format with proper line breaks, bullet points where appropriate, and clear section h[...]
                     },
                     {
                         "role":    "user",
@@ -434,7 +454,13 @@ def inline_diff(old: str, new: str, field: str = "") -> tuple:
 
 
 def build_email_body(changed_configs: list, ts: str) -> tuple:
-    env_label = "PRODUCTION/UAT🔴" if ENV_TARGET == "prod" else "DEV 🟡"
+    env_label_map = {
+        "dev": "DEV 🟡",
+        "jkc-uat": "JKC-UAT 🔵",
+        "jkc-prod": "JKC-PROD 🟠",
+        "prod": "PRODUCTION 🔴",
+    }
+    env_label = env_label_map.get(ENV_TARGET, ENV_TARGET.upper())
     subject   = f"OCR CONFIG CHANGE[{ENV_TARGET.upper()}] {len(changed_configs)} Version(s) changed"
 
     html = f"""
