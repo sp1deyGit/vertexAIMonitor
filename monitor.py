@@ -31,8 +31,8 @@ ENV_CONFIG = {
         "REFRESH_URL":   "https://api-uat.jkyms.com/support/auth/token/refresh",
         "GET_ALL_URL":   "https://api-uat.jkyms.com/support/vertexAi/getAllConfigs",
         "GET_ONE_URL":   "https://api-uat.jkyms.com/support/vertexAi/getConfig",
-        "USERNAME":      os.environ.get("JKC_UAT_USERNAME", ""),
-        "PASSWORD":      os.environ.get("JKC_UAT_PASSWORD", ""),
+        "USERNAME":      os.environ.get("JKC_USERNAME", ""),
+        "PASSWORD":      os.environ.get("JKC_PASSWORD", ""),
         "SNAPSHOT_FILE": "snapshot_jkc_uat.json",
         "LOG_FILE":      "change_log_jkc_uat.json",
     },
@@ -41,8 +41,8 @@ ENV_CONFIG = {
         "REFRESH_URL":   "https://api.jkyms.com/support/auth/token/refresh",
         "GET_ALL_URL":   "https://api.jkyms.com/support/vertexAi/getAllConfigs",
         "GET_ONE_URL":   "https://api.jkyms.com/support/vertexAi/getConfig",
-        "USERNAME":      os.environ.get("JKC_PROD_USERNAME", ""),
-        "PASSWORD":      os.environ.get("JKC_PROD_PASSWORD", ""),
+        "USERNAME":      os.environ.get("JKC_USERNAME", ""),
+        "PASSWORD":      os.environ.get("JKC_PASSWORD", ""),
         "SNAPSHOT_FILE": "snapshot_jkc_prod.json",
         "LOG_FILE":      "change_log_jkc_prod.json",
     },
@@ -114,7 +114,7 @@ _session = AuthSession()
 # LOGIN
 def login() -> Optional[str]:
     if not USERNAME or not PASSWORD:
-        print(f"[ERROR] {ENV_TARGET.upper()}_USERNAME / {ENV_TARGET.upper()}_PASSWORD not set in GitHub secrets")
+        print(f"[ERROR] JKC_USERNAME / JKC_PASSWORD not set in GitHub secrets")
         return None
 
     try:
@@ -576,7 +576,7 @@ def main():
     print(f"[START] Endpoint: {GET_ALL_URL}")
 
     if not login():
-        print(f"[FATAL] Cannot authenticate — check {ENV_TARGET.upper()}_USERNAME / {ENV_TARGET.upper()}_PASSWORD secrets")
+        print(f"[FATAL] Cannot authenticate — check JKC_USERNAME / JKC_PASSWORD secrets")
         sys.exit(1)
 
     snapshot     = load_snapshot()
