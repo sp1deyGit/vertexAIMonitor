@@ -1,26 +1,31 @@
 name: VertexWatch
-
+ 
 on:
   workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
-
+ 
+# Prevent concurrent runs to avoid 409 Conflict on login
+concurrency:
+  group: vertexwatch-monitors
+  cancel-in-progress: false
+ 
 jobs:
-
+ 
   monitor-dev:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
+ 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+ 
       - name: Install dependencies
         run: pip install requests
-
+ 
       - name: Restore cache
         uses: actions/cache@v4
         with:
@@ -30,7 +35,7 @@ jobs:
           key: vertexwatch-dev-${{ github.run_id }}
           restore-keys: |
             vertexwatch-dev-
-
+ 
       - name: Run monitor (dev)
         env:
           ENV_TARGET:    dev
@@ -40,7 +45,7 @@ jobs:
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_EMAIL:   ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
-
+ 
       - name: Upload dev logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -48,22 +53,22 @@ jobs:
           name: logs-dev
           path: change_log_dev.json
           if-no-files-found: ignore
-
-
+ 
+ 
   monitor-jkc-uat:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
+ 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+ 
       - name: Install dependencies
         run: pip install requests
-
+ 
       - name: Restore cache
         uses: actions/cache@v4
         with:
@@ -73,7 +78,7 @@ jobs:
           key: vertexwatch-jkc-uat-${{ github.run_id }}
           restore-keys: |
             vertexwatch-jkc-uat-
-
+ 
       - name: Run monitor (jkc-uat)
         env:
           ENV_TARGET:   jkc-uat
@@ -83,7 +88,7 @@ jobs:
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_EMAIL:  ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
-
+ 
       - name: Upload jkc-uat logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -91,21 +96,21 @@ jobs:
           name: logs-jkc-uat
           path: change_log_jkc_uat.json
           if-no-files-found: ignore
-
+ 
   monitor-jkc-prod:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
+ 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+ 
       - name: Install dependencies
         run: pip install requests
-
+ 
       - name: Restore cache
         uses: actions/cache@v4
         with:
@@ -115,7 +120,7 @@ jobs:
           key: vertexwatch-jkc-prod-${{ github.run_id }}
           restore-keys: |
             vertexwatch-jkc-prod-
-
+ 
       - name: Run monitor (jkc-prod)
         env:
           ENV_TARGET:   jkc-prod
@@ -125,7 +130,7 @@ jobs:
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_EMAIL:  ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
-
+ 
       - name: Upload jkc-prod logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -133,22 +138,22 @@ jobs:
           name: logs-jkc-prod
           path: change_log_jkc_prod.json
           if-no-files-found: ignore
-
+ 
           
   monitor-prod:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
+ 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+ 
       - name: Install dependencies
         run: pip install requests
-
+ 
       - name: Restore cache
         uses: actions/cache@v4
         with:
@@ -158,7 +163,7 @@ jobs:
           key: vertexwatch-prod-${{ github.run_id }}
           restore-keys: |
             vertexwatch-prod-
-
+ 
       - name: Run monitor (prod)
         env:
           ENV_TARGET:     prod
@@ -168,7 +173,7 @@ jobs:
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
-
+ 
       - name: Upload prod logs
         if: always()
         uses: actions/upload-artifact@v4
