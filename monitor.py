@@ -111,18 +111,53 @@ class AuthSession:
 _session = AuthSession()
  
  
-# LOGIN
-def login() -> Optional[str]:
+# LOGIN (with retry for CI/CD environments)
+def login(attempt: int = 1, max_attempts: int = 3) -> Optional[str]:
     if not USERNAME or not PASSWORD:
         print(f"[ERROR] JKC_USERNAME / JKC_PASSWORD not set in GitHub secrets")
         return None
  
     try:
+        print(f"[AUTH] Login attempt {attempt}/{max_attempts}...")
         resp = requests.post(
             LOGIN_URL,
             json={"username": USERNAME, "password": PASSWORD},
-            timeout=10,
+            timeout=15,
+            headers={"Content-Type": "application/json"}
         )
+        
+        # Log response status and headers
+        print(f"[AUTH] Response status: {resp.status_code}")
+        
+        # Handle specific error codes
+        if resp.status_code == 409:
+            # Conflict — likely concurrent login or rate limit
+            print(f"[ERROR] 409 Conflict detected")
+            print(f"[ERROR] Response body: {resp.text[:500]}")
+            if attempt < max_attempts:
+                wait_time = 10 * attempt  # Exponential backoff: 10s, 20s, 30s
+                print(f"[AUTH] Retrying in {wait_time}s (attempt {attempt}/{max_attempts})")
+                time.sleep(wait_time)
+                return login(attempt + 1, max_attempts)
+            else:
+                print(f"[ERROR] 409 Conflict after {max_attempts} attempts — giving up")
+                return None
+        
+        elif resp.status_code == 401:
+            print(f"[ERROR] 401 Unauthorized — Invalid credentials")
+            print(f"[ERROR] Response: {resp.text[:500]}")
+            return None
+        
+        elif resp.status_code == 403:
+            print(f"[ERROR] 403 Forbidden — Access denied")
+            print(f"[ERROR] Response: {resp.text[:500]}")
+            return None
+        
+        elif resp.status_code >= 400:
+            print(f"[ERROR] HTTP {resp.status_code} error")
+            print(f"[ERROR] Response: {resp.text[:500]}")
+            return None
+        
         resp.raise_for_status()
         body = resp.json()
         _session.from_response(body)
@@ -135,8 +170,20 @@ def login() -> Optional[str]:
         print(f"[AUTH] Login OK — user: {_session.user_name}  |  expires: {expires_readable}")
         return _session.access_token
  
+    except requests.exceptions.Timeout as e:
+        print(f"[ERROR] Login timeout (15s) — {e}")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        print(f"[ERROR] Connection error — {e}")
+        return None
     except requests.RequestException as e:
-        print(f"[ERROR] Login failed: {e}")
+        print(f"[ERROR] Login request failed: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"[ERROR] Status code: {e.response.status_code}")
+            print(f"[ERROR] Response body: {e.response.text[:500]}")
+        return None
+    except Exception as e:
+        print(f"[ERROR] Unexpected error during login: {e}")
         return None
  
  
@@ -179,6 +226,7 @@ def get_valid_token() -> Optional[str]:
 def fetch_config_by_id(config_id: str) -> Optional[dict]:
     token = get_valid_token()
     if not token:
+        print(f"[ERROR] No valid token available for getConfig/{config_id}")
         return None
     try:
         resp = requests.get(
@@ -186,16 +234,34 @@ def fetch_config_by_id(config_id: str) -> Optional[dict]:
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
+        
+        if resp.status_code >= 400:
+            print(f"[ERROR] getConfig/{config_id} failed with HTTP {resp.status_code}")
+            print(f"[ERROR] Response: {resp.text[:500]}")
+            return None
+        
         resp.raise_for_status()
         return resp.json()
+    except requests.exceptions.Timeout:
+        print(f"[ERROR] getConfig/{config_id} timeout (10s)")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        print(f"[ERROR] getConfig/{config_id} connection error: {e}")
+        return None
     except requests.RequestException as e:
-        print(f"[ERROR] getConfig/{config_id} failed: {e}")
+        print(f"[ERROR] getConfig/{config_id} request failed: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"[ERROR] Status: {e.response.status_code} | Body: {e.response.text[:500]}")
+        return None
+    except Exception as e:
+        print(f"[ERROR] getConfig/{config_id} unexpected error: {e}")
         return None
  
  
 def fetch_configs() -> Optional[dict]:
     token = get_valid_token()
     if not token:
+        print(f"[ERROR] No valid token available for getAllConfigs")
         return None
     try:
         resp = requests.get(
@@ -203,6 +269,12 @@ def fetch_configs() -> Optional[dict]:
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
+        
+        if resp.status_code >= 400:
+            print(f"[ERROR] getAllConfigs failed with HTTP {resp.status_code}")
+            print(f"[ERROR] Response: {resp.text[:500]}")
+            return None
+        
         resp.raise_for_status()
         body = resp.json()
         configs = body.get("data", [])
@@ -226,8 +298,19 @@ def fetch_configs() -> Optional[dict]:
  
         return result
  
+    except requests.exceptions.Timeout:
+        print(f"[ERROR] getAllConfigs timeout (10s)")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        print(f"[ERROR] getAllConfigs connection error: {e}")
+        return None
     except requests.RequestException as e:
-        print(f"[ERROR] getAllConfigs failed: {e}")
+        print(f"[ERROR] getAllConfigs request failed: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"[ERROR] Status: {e.response.status_code} | Body: {e.response.text[:500]}")
+        return None
+    except Exception as e:
+        print(f"[ERROR] getAllConfigs unexpected error: {e}")
         return None
  
  
@@ -343,6 +426,7 @@ def format_instruction_text(raw: str) -> str:
         return raw
  
     try:
+        print("[FORMAT] Calling Groq API to format instruction text...")
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
@@ -381,10 +465,29 @@ OUTPUT should be clean, maintainable, and dashboard-ready."""
             },
             timeout=30,
         )
+        
+        if resp.status_code >= 400:
+            print(f"[ERROR] Groq format API failed with HTTP {resp.status_code}")
+            print(f"[ERROR] Response: {resp.text[:500]}")
+            return raw
+        
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        result = resp.json()["choices"][0]["message"]["content"].strip()
+        print("[FORMAT] Groq formatting succeeded")
+        return result
+    except requests.exceptions.Timeout:
+        print(f"[ERROR] Groq format API timeout (30s)")
+        return raw
+    except requests.exceptions.ConnectionError as e:
+        print(f"[ERROR] Groq format API connection error: {e}")
+        return raw
+    except requests.RequestException as e:
+        print(f"[ERROR] Groq format API request failed: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"[ERROR] Status: {e.response.status_code} | Body: {e.response.text[:500]}")
+        return raw
     except Exception as e:
-        print(f"[FORMAT] Groq formatting failed ({e}) — using raw text")
+        print(f"[ERROR] Groq format API unexpected error: {e}")
         return raw
  
  
@@ -397,6 +500,7 @@ def ai_diff(old: str, new: str) -> tuple:
         return char_diff(old, new)
  
     try:
+        print("[DIFF] Calling Groq API for semantic diff...")
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
@@ -437,13 +541,42 @@ PRIORITY:
             },
             timeout=60,
         )
+        
+        if resp.status_code >= 400:
+            print(f"[ERROR] Groq diff API failed with HTTP {resp.status_code}")
+            print(f"[ERROR] Response: {resp.text[:500]}")
+            print("[DIFF] Falling back to character diff")
+            return char_diff(old, new)
+        
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"].strip()
         parsed  = json.loads(content)
+        print("[DIFF] Groq semantic diff succeeded")
         return parsed["before_html"], parsed["after_html"]
  
+    except requests.exceptions.Timeout:
+        print(f"[ERROR] Groq diff API timeout (60s) — falling back to character diff")
+        return char_diff(old, new)
+    except requests.exceptions.ConnectionError as e:
+        print(f"[ERROR] Groq diff API connection error: {e} — falling back to character diff")
+        return char_diff(old, new)
+    except requests.RequestException as e:
+        print(f"[ERROR] Groq diff API request failed: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"[ERROR] Status: {e.response.status_code} | Body: {e.response.text[:500]}")
+        print("[DIFF] Falling back to character diff")
+        return char_diff(old, new)
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] Groq diff API returned invalid JSON: {e}")
+        print("[DIFF] Falling back to character diff")
+        return char_diff(old, new)
+    except (KeyError, IndexError) as e:
+        print(f"[ERROR] Groq diff API response missing expected fields: {e}")
+        print("[DIFF] Falling back to character diff")
+        return char_diff(old, new)
     except Exception as e:
-        print(f"[DIFF] Groq diff failed ({e}) — falling back to character diff")
+        print(f"[ERROR] Groq diff API unexpected error: {e}")
+        print("[DIFF] Falling back to character diff")
         return char_diff(old, new)
  
  
@@ -581,27 +714,55 @@ def send_email(subject: str, html_body: str) -> bool:
     msg.attach(MIMEText(html_body, "html"))
  
     try:
+        print(f"[EMAIL] Connecting to smtp.gmail.com:465...")
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+            print(f"[EMAIL] Connected. Attempting login...")
             server.login(SMTP_USER, SMTP_PASS)
+            print(f"[EMAIL] Login successful. Sending email...")
             server.sendmail(SMTP_USER, recipients, msg.as_string())
         print(f"[EMAIL] Alert sent → {', '.join(recipients)}")
         return True
-    except smtplib.SMTPAuthenticationError:
-        print("[EMAIL] Authentication failed — check GMAIL_USER and GMAIL_APP_PASS")
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"[ERROR] SMTP Authentication failed")
+        print(f"[ERROR] Code: {e.smtp_code}")
+        print(f"[ERROR] Message: {e.smtp_error}")
+        print(f"[ERROR] Fix: Check GMAIL_USER and GMAIL_APP_PASS secrets")
+        return False
+    except smtplib.SMTPServerDisconnected as e:
+        print(f"[ERROR] SMTP server disconnected: {e}")
+        return False
+    except smtplib.SMTPException as e:
+        print(f"[ERROR] SMTP error: {e}")
+        print(f"[ERROR] Code: {getattr(e, 'smtp_code', 'N/A')}")
+        return False
+    except TimeoutError:
+        print(f"[ERROR] Email timeout (10s) — SMTP server not responding")
+        return False
+    except ConnectionError as e:
+        print(f"[ERROR] Email connection error: {e}")
         return False
     except Exception as e:
-        print(f"[EMAIL] Failed: {e}")
+        print(f"[ERROR] Email send failed: {e}")
+        print(f"[ERROR] Type: {type(e).__name__}")
         return False
  
  
 # MAIN POLL LOOP
 def main():
+    run_id = os.environ.get("GITHUB_RUN_ID", "local")
+    run_context = f"GitHub Actions (run #{run_id})" if run_id != "local" else "local"
+    
     print(f"[START] VertexWatch [{ENV_TARGET.upper()}] — {now_ist()}")
+    print(f"[START] Context: {run_context}")
     print(f"[START] Polling every {POLL_INTERVAL}s for {RUN_DURATION}s")
     print(f"[START] Endpoint: {GET_ALL_URL}")
  
     if not login():
         print(f"[FATAL] Cannot authenticate — check JKC_USERNAME / JKC_PASSWORD secrets")
+        print(f"[FATAL] For 409 Conflict errors, verify:")
+        print(f"        1. Workflow has concurrency control enabled")
+        print(f"        2. Credentials are correct for '{ENV_TARGET}' environment")
+        print(f"        3. No other workflow run is currently executing")
         sys.exit(1)
  
     snapshot     = load_snapshot()
@@ -657,7 +818,7 @@ def main():
                     "message":   f"{len(changed)} config(s) changed",
                     "configs":   changed,
                     "emailSent": sent,
-                    "runId":     os.environ.get("GITHUB_RUN_ID", "local"),
+                    "runId":     run_id,
                 }]
                 append_log(log_entries)
  
