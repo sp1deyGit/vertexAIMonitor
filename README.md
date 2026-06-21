@@ -1,105 +1,202 @@
-# VertexWatch
-> Monitors Vertex AI configs on `api.dev.eka.io` and emails you the moment anything changes.
-> Zero manual steps after setup — just push and forget.
+VertexWatch
 
----
+Real-time monitoring for Vertex AI OCR pipeline configurations across dev, jkc-uat, jkc-prod, and prod environments.
 
-## How it works
+Overview
 
-```
-GitHub Actions (every 5 min)
-  └── monitor.py starts
-        └── Logs in → gets fresh bearer token
-        └── Polls getAllConfigs every 30s for 4.5 minutes
-        └── Diffs against last known snapshot
-        └── Change detected → sends email alert instantly
-        └── Saves updated snapshot for next run
-  └── Loops again in 5 min
-```
+VertexWatch monitors Vertex AI configurations every 5 minutes, detects changes, and sends email alerts with detailed change summaries.
 
-Net result: changes are detected within **30 seconds** of being made on the dashboard.
+Features
 
----
 
-## One-time Setup (5 minutes)
+Multi-environment monitoring (dev, jkc-uat, jkc-prod, prod)
+Change detection (additions, modifications, deletions)
+Email notifications with HTML formatting
+Field-level change tracking
+Snapshot caching per environment
+Change logs with timestamps
+Retry logic with exponential backoff
+Comprehensive error logging
 
-### 1. Create a GitHub repo
-```bash
-git init
-git add .
-git commit -m "init vertexwatch"
-git remote add origin https://github.com/YOUR_USERNAME/vertexwatch.git
-git push -u origin main
-```
 
-### 2. Add Secrets
-Go to your repo → **Settings → Secrets and variables → Actions → New repository secret**
+File Structure
 
-Add all 6 secrets:
+.github/workflows/
+    └── main.yml              # GitHub Actions workflow
+monitor.py                    # Monitoring script
+requirements.txt              # Python dependencies
+README.md                     # Documentation
 
-| Secret Name | Value |
-|---|---|
-| `VERTEX_USERNAME` | Your dashboard login email |
-| `VERTEX_PASSWORD` | Your dashboard password |
-| `EMAILJS_SERVICE_ID` | From emailjs.com → Email Services |
-| `EMAILJS_TEMPLATE_ID` | Template with `{{to_email}}` `{{subject}}` `{{message}}` |
-| `EMAILJS_PUBLIC_KEY` | From EmailJS → Account → General |
-| `ALERT_EMAIL` | Where to send change alerts |
+Generated files (created at runtime):
 
-### 3. Update the login endpoint
-Once you share the login API details, update this line in `monitor.py`:
-```python
-LOGIN_URL = "https://api.dev.eka.io/___LOGIN_PATH___"
-```
 
-### 4. Push
-```bash
-git push
-```
+snapshot_dev.json
+snapshot_jkc_uat.json
+snapshot_jkc_prod.json
+snapshot_prod.json
+change_log_dev.json
+change_log_jkc_uat.json
+change_log_jkc_prod.json
+change_log_prod.json
 
-GitHub Actions will pick up the workflow automatically. First run establishes the baseline snapshot. Every run after that diffs and alerts.
 
----
+Setup
 
-## Email Alert Example
+Secrets Configuration
 
-```
-VERTEXWATCH — CONFIG CHANGE ALERT
-══════════════════════════════════════════════════════
+Configure these in Settings → Secrets and variables → Actions:
 
-Endpoint  : https://api.dev.eka.io/support/vertexAi/getAllConfigs
-Timestamp : 2026-03-13 14:32:10
-Changes   : 1 config(s) modified
 
-────────────────────────────────────────
-  Config ID : 4
-  Version   : v1
-  Type      : INVOICE_LINE_ITEM
-  Event     : MODIFIED
+DEV_USERNAME - Dev environment username
+DEV_PASSWORD - Dev environment password
+JKC_USERNAME - JKC username (shared for UAT and Prod)
+JKC_PASSWORD - JKC password (shared for UAT and Prod)
+PROD_USERNAME - Production username
+PROD_PASSWORD - Production password
+GMAIL_USER - Gmail address for alerts
+GMAIL_APP_PASS - Gmail App Password (16 characters)
+ALERT_EMAIL - Recipient email(s) (comma-separated)
 
-  Field                                       Before                After
-  ──────────────────────────────────────────  ────────────────────  ────────────────────
-  generationConfig.temperature                1.5                   1.0
-  model                                       abc                   gemini-2.5-flash
-  systemInstruction                           old text              new text
 
-══════════════════════════════════════════════════════
-Sent by VertexWatch — GitHub Actions Monitor
-```
+Gmail Setup
 
----
 
-## Files
+Go to Google Account → Security
+Enable 2-Step Verification
+Go to App passwords
+Select Mail and Windows Computer
+Copy the 16-character password
+Add as GMAIL_APP_PASS secret
 
-| File | Purpose |
-|---|---|
-| `monitor.py` | Main script — login, poll, diff, alert |
-| `requirements.txt` | Python deps (just `requests`) |
-| `snapshot.json` | Persisted between runs via Actions cache |
-| `.github/workflows/monitor.yml` | GitHub Actions workflow |
 
----
+How It Works
 
-## ⚠️ One pending step
-The **login endpoint URL and payload shape** need to be confirmed from DevTools.
-Update `LOGIN_URL` in `monitor.py` and the `json={...}` payload in the `login()` function once known.
+The workflow runs every 5 minutes with these steps:
+
+
+Authenticate to each environment
+Fetch all configurations
+Compare with previous snapshot
+Detect changes
+Send email alert if changes detected
+Update snapshot and change log
+
+
+Monitored Fields
+
+Top-level fields:
+
+
+version
+type
+locationId
+projectId
+apiEndPoint
+model
+systemInstruction
+userInstruction
+
+
+Generation config:
+
+
+temperature
+maxOutputTokens
+topP
+seed
+thinkingConfig.thinkingBudget
+
+
+Viewing Results
+
+GitHub Actions Logs
+
+
+Go to Actions tab
+Click VertexWatch workflow
+Click a run
+Expand job to see detailed logs
+
+
+Change Logs
+
+
+Go to workflow run
+Scroll to Artifacts section
+Download change_log_{env}.json files
+
+
+Email Alerts
+
+Alerts include:
+
+
+Environment label
+Config ID, type, and version
+Change event (MODIFIED, ADDED, REMOVED)
+Before/after field values
+HTML table format with highlighted changes
+
+
+Configuration
+
+POLL_INTERVAL = 10 seconds
+RUN_DURATION = 120 seconds
+Change log retention = 500 entries
+
+Troubleshooting
+
+409 Conflict Error
+
+
+Concurrent login attempts or rate limiting
+Workflow has concurrency control to prevent this
+Monitor retries up to 3 times with exponential backoff
+
+
+401 Unauthorized
+
+
+Invalid credentials
+Verify all username and password secrets
+Check credentials are correct for each environment
+
+
+Email Not Sending
+
+
+Verify GMAIL_USER, GMAIL_APP_PASS, and ALERT_EMAIL secrets
+Check 2-Step Verification is enabled on Gmail
+Ensure Gmail App Password is used (not main password)
+
+
+Timeout Errors
+
+
+API servers not responding or slow network
+Check network connectivity
+Retries happen automatically
+
+
+Error Logging
+
+All API calls log detailed error information including:
+
+
+HTTP status codes
+API response bodies
+Connection errors
+Timeout errors
+SMTP errors with codes
+
+
+Check GitHub Actions logs for complete error details.
+
+Security
+
+
+Secrets stored in GitHub (not in code)
+Credentials never logged
+API tokens handled securely
+Email uses Gmail App Password
+Concurrency control prevents race conditions
