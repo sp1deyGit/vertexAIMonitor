@@ -3,9 +3,9 @@ name: VertexWatch
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "0 */3 * * *"
  
-# Prevent concurrent runs to avoid 409 Conflict on login
+# Prevent concurrent runs - only one environment at a time
 concurrency:
   group: vertexwatch-monitors
   cancel-in-progress: false
@@ -83,7 +83,7 @@ jobs:
         env:
           ENV_TARGET:   jkc-uat
           JKC_USERNAME: ${{ secrets.JKC_USERNAME }}
-          JKC_PASSWORD: ${{ secrets.JKC_PASSWORD }}
+          JKC_PASSWORD: ${{ secrets.JKC_UAT_PASSWORD }}
           GMAIL_USER:   ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_EMAIL:  ${{ secrets.ALERT_EMAIL }}
@@ -125,7 +125,7 @@ jobs:
         env:
           ENV_TARGET:   jkc-prod
           JKC_USERNAME: ${{ secrets.JKC_USERNAME }}
-          JKC_PASSWORD: ${{ secrets.JKC_PASSWORD }}
+          JKC_PASSWORD: ${{ secrets.JKC_PROD_PASSWORD }}
           GMAIL_USER:   ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_EMAIL:  ${{ secrets.ALERT_EMAIL }}
