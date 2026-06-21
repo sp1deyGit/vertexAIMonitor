@@ -73,7 +73,7 @@ SNAPSHOT_FILE = cfg["SNAPSHOT_FILE"]
 LOG_FILE      = cfg["LOG_FILE"]
  
 POLL_INTERVAL = 10
-RUN_DURATION  = 120
+RUN_DURATION  = 20  # Allow up to 2 polls (1 normal + 1 retry if failed)
  
 # ENV — shared
 SMTP_USER   = os.environ.get("GMAIL_USER", "")
@@ -754,7 +754,6 @@ def main():
     
     print(f"[START] VertexWatch [{ENV_TARGET.upper()}] — {now_ist()}")
     print(f"[START] Context: {run_context}")
-    print(f"[START] Polling every {POLL_INTERVAL}s for {RUN_DURATION}s")
     print(f"[START] Endpoint: {GET_ALL_URL}")
  
     if not login():
@@ -773,21 +772,22 @@ def main():
     else:
         print(f"[SNAPSHOT] Loaded {len(snapshot)} configs from cache")
  
-    start_time   = time.time()
-    poll_count   = 0
-    total_alerts = 0
- 
-    while (time.time() - start_time) < RUN_DURATION:
-        poll_count += 1
+    # Poll once, retry once on failure
+    for attempt in range(1, 3):
+        poll_count = attempt
         now = now_ist()
         print(f"\n[POLL #{poll_count}] {now}")
  
         current = fetch_configs()
  
         if current is None:
-            print("[WARN] Could not fetch configs — skipping this poll")
-            time.sleep(POLL_INTERVAL)
-            continue
+            if attempt < 2:
+                print("[WARN] Fetch failed — retrying...")
+                time.sleep(5)  # Wait 5 seconds before retry
+                continue
+            else:
+                print("[ERROR] Fetch failed after retry — aborting")
+                sys.exit(1)
  
         print(f"[POLL] Fetched {len(current)} configs (full detail)")
  
@@ -795,7 +795,7 @@ def main():
             save_snapshot(current)
             snapshot     = current
             is_first_run = False
-            print("[SNAPSHOT] Baseline established — monitoring starts next poll")
+            print("[SNAPSHOT] Baseline established — no changes to report")
         else:
             changed = find_changes(snapshot, current)
  
@@ -826,21 +826,15 @@ def main():
                     # Only update snapshot if email was successfully sent
                     snapshot = current
                     save_snapshot(current)
-                    total_alerts += 1
                 else:
-                    print("[WARN] Email failed — snapshot NOT updated, will retry on next poll")
+                    print("[WARN] Email failed — snapshot NOT updated")
  
             else:
                 print("[POLL] No changes detected")
  
-        elapsed   = time.time() - start_time
-        remaining = RUN_DURATION - elapsed
-        wait      = min(POLL_INTERVAL, remaining)
-        if wait > 0:
-            print(f"[POLL] Waiting {int(wait)}s… ({int(remaining)}s remaining in run)")
-            time.sleep(wait)
- 
-    print(f"\n[DONE] Run complete — {poll_count} polls, {total_alerts} alert(s) sent")
+        # Exit after successful poll
+        print(f"\n[DONE] Run complete — poll successful")
+        break
  
  
 if __name__ == "__main__":
