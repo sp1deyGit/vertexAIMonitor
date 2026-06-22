@@ -38,12 +38,13 @@ jobs:
  
       - name: Run monitor (dev)
         env:
-          ENV_TARGET:    dev
-          DEV_USERNAME:  ${{ secrets.DEV_USERNAME }}
-          DEV_PASSWORD:  ${{ secrets.DEV_PASSWORD }}
-          GMAIL_USER:    ${{ secrets.GMAIL_USER }}
+          ENV_TARGET:     dev
+          DEV_USERNAME:   ${{ secrets.DEV_USERNAME }}
+          DEV_PASSWORD:   ${{ secrets.DEV_PASSWORD }}
+          GROQ_API_KEY:   ${{ secrets.GROQ_API_KEY }}
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_EMAIL:   ${{ secrets.ALERT_EMAIL }}
+          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
  
       - name: Upload dev logs
@@ -54,6 +55,48 @@ jobs:
           path: change_log_dev.json
           if-no-files-found: ignore
  
+  monitor-sandbox:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+ 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+ 
+      - name: Install dependencies
+        run: pip install requests
+ 
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            snapshot_sandbox.json
+            change_log_sandbox.json
+          key: vertexwatch-sandbox-${{ github.run_id }}
+          restore-keys: |
+            vertexwatch-sandbox-
+ 
+      - name: Run monitor (sandbox)
+        env:
+          ENV_TARGET:       sandbox
+          SANDBOX_USERNAME: ${{ secrets.SANDBOX_USERNAME }}
+          SANDBOX_PASSWORD: ${{ secrets.SANDBOX_PASSWORD }}
+          GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
+          GMAIL_USER:       ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS:   ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_EMAIL:      ${{ secrets.ALERT_EMAIL }}
+        run: python monitor.py
+ 
+      - name: Upload sandbox logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-sandbox
+          path: change_log_sandbox.json
+          if-no-files-found: ignore
  
   monitor-jkc-uat:
     runs-on: ubuntu-latest
@@ -81,12 +124,13 @@ jobs:
  
       - name: Run monitor (jkc-uat)
         env:
-          ENV_TARGET:   jkc-uat
-          JKC_USERNAME: ${{ secrets.JKC_USERNAME }}
-          JKC_PASSWORD: ${{ secrets.JKC_UAT_PASSWORD }}
-          GMAIL_USER:   ${{ secrets.GMAIL_USER }}
+          ENV_TARGET:     jkc-uat
+          JKC_USERNAME:   ${{ secrets.JKC_USERNAME }}
+          JKC_PASSWORD:   ${{ secrets.JKC_UAT_PASSWORD }}
+          GROQ_API_KEY:   ${{ secrets.GROQ_API_KEY }}
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_EMAIL:  ${{ secrets.ALERT_EMAIL }}
+          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
  
       - name: Upload jkc-uat logs
@@ -123,12 +167,13 @@ jobs:
  
       - name: Run monitor (jkc-prod)
         env:
-          ENV_TARGET:   jkc-prod
-          JKC_USERNAME: ${{ secrets.JKC_USERNAME }}
-          JKC_PASSWORD: ${{ secrets.JKC_PROD_PASSWORD }}
-          GMAIL_USER:   ${{ secrets.GMAIL_USER }}
+          ENV_TARGET:     jkc-prod
+          JKC_USERNAME:   ${{ secrets.JKC_USERNAME }}
+          JKC_PASSWORD:   ${{ secrets.JKC_PROD_PASSWORD }}
+          GROQ_API_KEY:   ${{ secrets.GROQ_API_KEY }}
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_EMAIL:  ${{ secrets.ALERT_EMAIL }}
+          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
  
       - name: Upload jkc-prod logs
@@ -136,10 +181,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: logs-jkc-prod
-          path: change_log_jkc_prod.json
+          path: change_log_prod.json
           if-no-files-found: ignore
  
-          
   monitor-prod:
     runs-on: ubuntu-latest
     steps:
@@ -169,6 +213,7 @@ jobs:
           ENV_TARGET:     prod
           PROD_USERNAME:  ${{ secrets.PROD_USERNAME }}
           PROD_PASSWORD:  ${{ secrets.PROD_PASSWORD }}
+          GROQ_API_KEY:   ${{ secrets.GROQ_API_KEY }}
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
