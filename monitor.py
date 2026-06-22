@@ -42,7 +42,7 @@ ENV_CONFIG = {
         "GET_ALL_URL":   "https://api-uat.jkyms.com/support/vertexAi/getAllConfigs",
         "GET_ONE_URL":   "https://api-uat.jkyms.com/support/vertexAi/getConfig",
         "USERNAME":      os.environ.get("JKC_USERNAME", ""),
-        "PASSWORD":      os.environ.get("JKC_PASSWORD", ""),
+        "PASSWORD":      os.environ.get("JKC_UAT_PASSWORD", ""),
         "SNAPSHOT_FILE": "snapshot_jkc_uat.json",
         "LOG_FILE":      "change_log_jkc_uat.json",
     },
