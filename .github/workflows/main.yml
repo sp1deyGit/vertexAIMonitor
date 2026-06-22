@@ -124,13 +124,13 @@ jobs:
  
       - name: Run monitor (jkc-uat)
         env:
-          ENV_TARGET:     jkc-uat
-          JKC_USERNAME:   ${{ secrets.JKC_USERNAME }}
-          JKC_UAT_PASSWORD:   ${{ secrets.JKC_UAT_PASSWORD }}
-          GROQ_API_KEY:   ${{ secrets.GROQ_API_KEY }}
-          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
+          ENV_TARGET:        jkc-uat
+          JKC_USERNAME:      ${{ secrets.JKC_USERNAME }}
+          JKC_UAT_PASSWORD:  ${{ secrets.JKC_UAT_PASSWORD }}
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          GMAIL_USER:        ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS:    ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_EMAIL:       ${{ secrets.ALERT_EMAIL }}
         run: python monitor.py
  
       - name: Upload jkc-uat logs
@@ -167,21 +167,25 @@ jobs:
  
       - name: Run monitor (jkc-prod)
         env:
-          ENV_TARGET:     jkc-prod
-          JKC_USERNAME:   ${{ secrets.JKC_USERNAME }}
-          JKC_PROD_PASSWORD:   ${{ secrets.JKC_PROD_PASSWORD }}
-          GROQ_API_KEY:   ${{ secrets.GROQ_API_KEY }}
-          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
-        run: python monitor.py
+          ENV_TARGET:        jkc-prod
+          JKC_USERNAME:      ${{ secrets.JKC_USERNAME }}
+          JKC_PROD_PASSWORD: ${{ secrets.JKC_PROD_PASSWORD }}
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          GMAIL_USER:        ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS:    ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_EMAIL:       ${{ secrets.ALERT_EMAIL }}
+        run: |
+          echo "=== DUMPING RUNNER ENV KEYS ==="
+          env | grep JKC || true
+          echo "==============================="
+          python monitor.py
  
       - name: Upload jkc-prod logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: logs-jkc-prod
-          path: change_log_prod.json
+          path: change_log_jkc_prod.json
           if-no-files-found: ignore
  
   monitor-prod:
