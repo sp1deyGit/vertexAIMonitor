@@ -132,13 +132,13 @@ def login(attempt: int = 1, max_attempts: int = 3) -> Optional[str]:
         resp = requests.post(
             LOGIN_URL,
             json={"username": USERNAME, "password": PASSWORD},
-            timeout=15,
+            timeout=45,  # Increased from 15 to 45 seconds
             headers={"Content-Type": "application/json"}
         )
-        
+         
         # Log response status and headers
         print(f"[AUTH] Response status: {resp.status_code}")
-        
+         
         # Handle specific error codes
         if resp.status_code == 409:
             # Conflict — likely concurrent login or rate limit
@@ -152,22 +152,22 @@ def login(attempt: int = 1, max_attempts: int = 3) -> Optional[str]:
             else:
                 print(f"[ERROR] 409 Conflict after {max_attempts} attempts — giving up")
                 return None
-        
+         
         elif resp.status_code == 401:
             print(f"[ERROR] 401 Unauthorized — Invalid credentials")
             print(f"[ERROR] Response: {resp.text[:500]}")
             return None
-        
+         
         elif resp.status_code == 403:
             print(f"[ERROR] 403 Forbidden — Access denied")
             print(f"[ERROR] Response: {resp.text[:500]}")
             return None
-        
+         
         elif resp.status_code >= 400:
             print(f"[ERROR] HTTP {resp.status_code} error")
             print(f"[ERROR] Response: {resp.text[:500]}")
             return None
-        
+         
         resp.raise_for_status()
         body = resp.json()
         _session.from_response(body)
@@ -181,7 +181,7 @@ def login(attempt: int = 1, max_attempts: int = 3) -> Optional[str]:
         return _session.access_token
  
     except requests.exceptions.Timeout as e:
-        print(f"[ERROR] Login timeout (15s) — {e}")
+        print(f"[ERROR] Login timeout (45s) — {e}")  # Updated error message
         return None
     except requests.exceptions.ConnectionError as e:
         print(f"[ERROR] Connection error — {e}")
@@ -206,7 +206,7 @@ def refresh_token() -> Optional[str]:
         resp = requests.post(
             REFRESH_URL,
             json={"refresh_token": _session.refresh_token},
-            timeout=10,
+            timeout=30,  # Increased from 10 to 30 seconds
         )
         resp.raise_for_status()
         body = resp.json()
@@ -242,18 +242,18 @@ def fetch_config_by_id(config_id: str) -> Optional[dict]:
         resp = requests.get(
             f"{GET_ONE_URL}/{config_id}",
             headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
+            timeout=30,  # Increased from 10 to 30 seconds
         )
-        
+         
         if resp.status_code >= 400:
             print(f"[ERROR] getConfig/{config_id} failed with HTTP {resp.status_code}")
             print(f"[ERROR] Response: {resp.text[:500]}")
             return None
-        
+         
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.Timeout:
-        print(f"[ERROR] getConfig/{config_id} timeout (10s)")
+        print(f"[ERROR] getConfig/{config_id} timeout (30s)")  # Updated error message
         return None
     except requests.exceptions.ConnectionError as e:
         print(f"[ERROR] getConfig/{config_id} connection error: {e}")
@@ -277,14 +277,14 @@ def fetch_configs() -> Optional[dict]:
         resp = requests.get(
             GET_ALL_URL,
             headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
+            timeout=30,  # Increased from 10 to 30 seconds
         )
-        
+         
         if resp.status_code >= 400:
             print(f"[ERROR] getAllConfigs failed with HTTP {resp.status_code}")
             print(f"[ERROR] Response: {resp.text[:500]}")
             return None
-        
+         
         resp.raise_for_status()
         body = resp.json()
         configs = body.get("data", [])
@@ -309,7 +309,7 @@ def fetch_configs() -> Optional[dict]:
         return result
  
     except requests.exceptions.Timeout:
-        print(f"[ERROR] getAllConfigs timeout (10s)")
+        print(f"[ERROR] getAllConfigs timeout (30s)")  # Updated error message
         return None
     except requests.exceptions.ConnectionError as e:
         print(f"[ERROR] getAllConfigs connection error: {e}")
@@ -475,12 +475,12 @@ OUTPUT should be clean, maintainable, and dashboard-ready."""
             },
             timeout=30,
         )
-        
+         
         if resp.status_code >= 400:
             print(f"[ERROR] Groq format API failed with HTTP {resp.status_code}")
             print(f"[ERROR] Response: {resp.text[:500]}")
             return raw
-        
+         
         resp.raise_for_status()
         result = resp.json()["choices"][0]["message"]["content"].strip()
         print("[FORMAT] Groq formatting succeeded")
@@ -551,13 +551,13 @@ PRIORITY:
             },
             timeout=60,
         )
-        
+         
         if resp.status_code >= 400:
             print(f"[ERROR] Groq diff API failed with HTTP {resp.status_code}")
             print(f"[ERROR] Response: {resp.text[:500]}")
             print("[DIFF] Falling back to character diff")
             return char_diff(old, new)
-        
+         
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"].strip()
         parsed  = json.loads(content)
@@ -635,7 +635,6 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
     <html><body style="font-family:monospace;font-size:13px;background:#f4f4f4;padding:20px;margin:0;">
     <div style="max-width:960px;margin:auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.12);">
  
-      <!-- HEADER -->
       <div style="background:#1a1a2e;color:#fff;padding:20px 30px;">
         <h2 style="margin:0;font-size:18px;letter-spacing:0.5px;">&#128269; VertexWatch — Config Change Alert</h2>
         <p style="margin:6px 0 0;color:#aaa;font-size:12px;">
@@ -725,7 +724,7 @@ def send_email(subject: str, html_body: str) -> bool:
  
     try:
         print(f"[EMAIL] Connecting to smtp.gmail.com:465...")
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:  # Increased from 10 to 30 seconds
             print(f"[EMAIL] Connected. Attempting login...")
             server.login(SMTP_USER, SMTP_PASS)
             print(f"[EMAIL] Login successful. Sending email...")
@@ -746,7 +745,7 @@ def send_email(subject: str, html_body: str) -> bool:
         print(f"[ERROR] Code: {getattr(e, 'smtp_code', 'N/A')}")
         return False
     except TimeoutError:
-        print(f"[ERROR] Email timeout (10s) — SMTP server not responding")
+        print(f"[ERROR] Email timeout (30s) — SMTP server not responding")  # Updated error message
         return False
     except ConnectionError as e:
         print(f"[ERROR] Email connection error: {e}")
@@ -761,7 +760,7 @@ def send_email(subject: str, html_body: str) -> bool:
 def main():
     run_id = os.environ.get("GITHUB_RUN_ID", "local")
     run_context = f"GitHub Actions (run #{run_id})" if run_id != "local" else "local"
-    
+     
     print(f"[START] VertexWatch [{ENV_TARGET.upper()}] — {now_ist()}")
     print(f"[START] Context: {run_context}")
     print(f"[START] Endpoint: {GET_ALL_URL}")
