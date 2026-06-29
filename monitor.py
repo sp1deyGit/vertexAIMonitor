@@ -444,7 +444,7 @@ def format_instruction_text(raw: str) -> str:
                 "Content-Type":  "application/json",
             },
             json={
-                "model":      "llama-3.1-8b-instant",
+                "model":      "llama-3.3-70b-versatile",  # Upgraded model for higher baseline TPM limits
                 "max_tokens": 2048,
                 "messages": [
                     {
@@ -501,16 +501,24 @@ OUTPUT should be clean, maintainable, and dashboard-ready."""
         return raw
  
  
-# EMAIL
-def ai_diff(old: str, new: str) -> tuple:
-    """Use Groq to semantically compare two texts and return highlighted HTML."""
+# EMAIL AI UTILITIES
+def generate_functional_summary(old_text: str, new_text: str) -> str:
+    """Uses Groq to generate a concise summary of how a prompt change transforms operational behavior."""
     groq_key = os.environ.get("GROQ_API_KEY", "")
     if not groq_key:
-        print("[DIFF] GROQ_API_KEY not set — falling back to character diff")
-        return char_diff(old, new)
- 
+        return "GROQ_API_KEY environment secret is missing. Cannot evaluate prompt modifications."
+
+    # Perform line-level comparison locally to optimize token payloads
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    unified_diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
+    delta_lines = "\n".join([line for line in unified_diff if line.startswith('+') or line.startswith('-')])
+
+    if not delta_lines.strip():
+        return "No explicit configuration or structural rule modifications detected in this instruction field update."
+
     try:
-        print("[DIFF] Calling Groq API for semantic diff...")
+        print("[SUMMARY] Dispatching isolated prompt delta to Groq for change analysis...")
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
@@ -518,76 +526,143 @@ def ai_diff(old: str, new: str) -> tuple:
                 "Content-Type":  "application/json",
             },
             json={
-                "model":      "llama-3.1-8b-instant",
-                "max_tokens": 8192,
+                "model":      "llama-3.3-70b-versatile",
+                "max_tokens": 300,
+                "temperature": 0.2,
                 "messages": [
                     {
                         "role": "system",
-                        "content": """You are a precise semantic diff tool for technical text.
+                        "content": "You are an expert prompt engineer and code intelligence analyzer. You will receive a unified text diff outlining updates to an OCR extraction system instruction prompt. Provide a highly direct, concise 2-to-3 sentence explanation summarizing what behavioral changes, technical rules, or execution restrictions this modification forces onto the processing engine."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Analyze the following changes made to the system instructions and explain its real-world functional impact:\n\n{delta_lines}"
+                    }
+                ]
+            },
+            timeout=30,
+        )
+
+        if resp.status_code >= 400:
+            return "Unable to compile functional impact analysis due to an upstream API connectivity issue."
+            
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"[ERROR] Failed to compile prompt functional overview: {e}")
+        return "A processing error occurred while attempting to dynamically evaluate the prompt engineering changes."
+
+
+def ai_diff(old: str, new: str) -> tuple:
+    """Use Groq to semantically compare two texts by processing only changed blocks to save tokens."""
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        print("[DIFF] GROQ_API_KEY not set — falling back to character diff")
+        return char_diff(old, new)
  
-TASK: Compare BEFORE and AFTER text, return HTML with highlighted changes.
+    # Split lines to track identical sections and isolate actual modifications
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+    old_html_chunks = []
+    new_html_chunks = []
+ 
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        old_chunk_text = "".join(old_lines[i1:i2])
+        new_chunk_text = "".join(new_lines[j1:j2])
+ 
+        if op == "equal":
+            # Pass unchanged segments directly through local Python processing (0 API tokens used)
+            escaped_old = old_chunk_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            escaped_new = new_chunk_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            old_html_chunks.append(escaped_old)
+            new_html_chunks.append(escaped_new)
+        else:
+            # Handle straightforward deletions or additions locally to preserve tokens
+            if op == "delete" or not new_chunk_text.strip():
+                escaped = old_chunk_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                old_html_chunks.append(f'<mark style="background:#ffb3b3;color:#900;border-radius:2px;padding:0 1px;">{escaped}</mark>')
+                continue
+            if op == "insert" or not old_chunk_text.strip():
+                escaped = new_chunk_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                new_html_chunks.append(f'<mark style="background:#b3ffb3;color:#060;border-radius:2px;padding:0 1px;">{escaped}</mark>')
+                continue
+ 
+            # Check estimated token impact of complex modifications (approx. 4 characters per token)
+            estimated_tokens = (len(old_chunk_text) + len(new_chunk_text)) // 4
+            if estimated_tokens > 4500:
+                print(f"[DIFF] Modification block too large ({estimated_tokens} est. tokens). Running local fallback char_diff for safety.")
+                block_old_html, block_new_html = char_diff(old_chunk_text, new_chunk_text)
+                old_html_chunks.append(block_old_html)
+                new_html_chunks.append(block_new_html)
+                continue
+ 
+            try:
+                print(f"[DIFF] Calling Groq API for semantic block diff ({estimated_tokens} est. tokens)...")
+                resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {groq_key}",
+                        "Content-Type":  "application/json",
+                    },
+                    json={
+                        "model":      "llama-3.3-70b-versatile",  # Upgraded model for higher TPM allocations
+                        "max_tokens": 4096,
+                        "temperature": 0.0,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": """You are a precise semantic diff tool for technical text segments.
+ 
+TASK: Compare the BEFORE and AFTER text segment, and return HTML with highlighted changes.
  
 OUTPUT: Return ONLY a valid JSON object with exactly two keys:
-  "before_html" — full BEFORE text with changes marked
-  "after_html" — full AFTER text with changes marked
+  "before_html" — the BEFORE text segment with changes marked
+  "after_html" — the AFTER text segment with changes marked
  
 HIGHLIGHTING RULES:
 - REMOVED/CHANGED in BEFORE: wrap in <mark style="background:#ffb3b3;color:#900;border-radius:2px;padding:0 1px;">text</mark>
 - ADDED/CHANGED in AFTER: wrap in <mark style="background:#b3ffb3;color:#060;border-radius:2px;padding:0 1px;">text</mark>
 - Highlight at SENTENCE or PHRASE level (not character-by-character)
 - Preserve ALL line breaks and whitespace using proper HTML entities/formatting
-- Return ONLY valid JSON — no markdown, no explanation, no fences
- 
-PRIORITY:
-1. Semantic meaning (highlight meaningful changes, not typos)
-2. Readability (highlight in logical chunks, not words)
-3. Completeness (both full texts required)"""
+- Return ONLY valid JSON — no markdown, no explanation, no fences"""
+                            },
+                            {
+                                "role": "user",
+                                "content": f"BEFORE:\n{old_chunk_text}\n\nAFTER:\n{new_chunk_text}"
+                            }
+                        ],
                     },
-                    {
-                        "role": "user",
-                        "content": f"BEFORE:\n{old}\n\nAFTER:\n{new}"
-                    }
-                ],
-            },
-            timeout=60,
-        )
-         
-        if resp.status_code >= 400:
-            print(f"[ERROR] Groq diff API failed with HTTP {resp.status_code}")
-            print(f"[ERROR] Response: {resp.text[:500]}")
-            print("[DIFF] Falling back to character diff")
-            return char_diff(old, new)
-         
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
-        parsed  = json.loads(content)
-        print("[DIFF] Groq semantic diff succeeded")
-        return parsed["before_html"], parsed["after_html"]
+                    timeout=45,
+                )
+                 
+                if resp.status_code >= 400:
+                    print(f"[ERROR] Groq block diff failed with HTTP {resp.status_code}. Using fallback char_diff.")
+                    block_old_html, block_new_html = char_diff(old_chunk_text, new_chunk_text)
+                    old_html_chunks.append(block_old_html)
+                    new_html_chunks.append(block_new_html)
+                    continue
+                 
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"].strip()
+                
+                # Sanitize random LLM markdown wrappers if present
+                if content.startswith("```"):
+                    content = content.strip("`").strip("json").strip()
+                    
+                parsed  = json.loads(content)
+                old_html_chunks.append(parsed["before_html"])
+                new_html_chunks.append(parsed["after_html"])
+                print("[DIFF] Groq semantic block diff succeeded")
+     
+            except Exception as e:
+                print(f"[ERROR] Semantic block diff exception: {e} — using fallback char_diff")
+                block_old_html, block_new_html = char_diff(old_chunk_text, new_chunk_text)
+                old_html_chunks.append(block_old_html)
+                new_html_chunks.append(block_new_html)
  
-    except requests.exceptions.Timeout:
-        print(f"[ERROR] Groq diff API timeout (60s) — falling back to character diff")
-        return char_diff(old, new)
-    except requests.exceptions.ConnectionError as e:
-        print(f"[ERROR] Groq diff API connection error: {e} — falling back to character diff")
-        return char_diff(old, new)
-    except requests.RequestException as e:
-        print(f"[ERROR] Groq diff API request failed: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"[ERROR] Status: {e.response.status_code} | Body: {e.response.text[:500]}")
-        print("[DIFF] Falling back to character diff")
-        return char_diff(old, new)
-    except json.JSONDecodeError as e:
-        print(f"[ERROR] Groq diff API returned invalid JSON: {e}")
-        print("[DIFF] Falling back to character diff")
-        return char_diff(old, new)
-    except (KeyError, IndexError) as e:
-        print(f"[ERROR] Groq diff API response missing expected fields: {e}")
-        print("[DIFF] Falling back to character diff")
-        return char_diff(old, new)
-    except Exception as e:
-        print(f"[ERROR] Groq diff API unexpected error: {e}")
-        print("[DIFF] Falling back to character diff")
-        return char_diff(old, new)
+    return "".join(old_html_chunks), "".join(new_html_chunks)
  
  
 def char_diff(old: str, new: str) -> tuple:
@@ -624,6 +699,7 @@ def inline_diff(old: str, new: str, field: str = "") -> tuple:
 def build_email_body(changed_configs: list, ts: str) -> tuple:
     env_label_map = {
         "dev": "DEV 🟡",
+        "sandbox": "SANDBOX ⚪",
         "jkc-uat": "JKC-UAT 🔵",
         "jkc-prod": "JKC-PROD 🟠",
         "prod": "PRODUCTION 🔴",
@@ -656,26 +732,41 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
         event        = item.get("event", "MODIFIED")
         bg, fg, icon = event_colors.get(event, ("#fff", "#000", "?"))
  
+        # Evaluate rules and build AI summary analysis if systemInstruction field shifted
+        summary_html = ""
+        for c in item["changes"]:
+            if c["field"] == "systemInstruction":
+                summary_text = generate_functional_summary(str(c["old"]), str(c["new"]))
+                summary_html = f"""
+                <div style="background: #f0f7ff; color: #1e3a8a; border: 1px solid #bfdbfe; border-left: 4px solid #3b82f6; padding: 14px 18px; margin-bottom: 16px; border-radius: 4px; font-size: 12px; line-height: 1.6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                  <strong style="font-size: 13px; color: #1e40af; display: block; margin-bottom: 4px;">🤖 Operational Change Summary (AI Evaluation)</strong>
+                  <span style="color: #374151;">{summary_text}</span>
+                </div>
+                """
+                break
+ 
         html += f"""
       <div style="margin:24px 30px 0;">
         <div style="background:{bg};color:{fg};padding:10px 16px;border-radius:6px 6px 0 0;font-weight:bold;font-size:13px;">
           [{icon}] Config #{item['configId']} &nbsp;|&nbsp; {item['type']} &nbsp;|&nbsp; {item['version']} &nbsp;|&nbsp; {event}
         </div>
-        <table style="width:100%;border-collapse:collapse;border:1px solid #ddd;border-top:none;table-layout:fixed;">
-          <colgroup>
-            <col style="width:18%;">
-            <col style="width:41%;">
-            <col style="width:41%;">
-          </colgroup>
-          <thead>
-            <tr style="background:#f0f0f0;">
-              <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;">Field</th>
-              <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;background:#fff5f5;">&#8592; Before</th>
-              <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;background:#f5fff5;">After &#8594;</th>
-            </tr>
-          </thead>
-          <tbody>
-        """
+        <div style="background:#fff; padding:18px; border:1px solid #ddd; border-top:none;">
+          {summary_html}
+          <table style="width:100%;border-collapse:collapse;border:1px solid #ddd;table-layout:fixed;">
+            <colgroup>
+              <col style="width:18%;">
+              <col style="width:41%;">
+              <col style="width:41%;">
+            </colgroup>
+            <thead>
+              <tr style="background:#f0f0f0;">
+                <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;">Field</th>
+                <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;background:#fff5f5;">&#8592; Before</th>
+                <th style="padding:8px 12px;text-align:left;border:1px solid #ddd;font-size:12px;background:#f5fff5;">After &#8594;</th>
+              </tr>
+            </thead>
+            <tbody>
+          """
  
         if item["changes"]:
             for c in item["changes"]:
@@ -703,9 +794,12 @@ def build_email_body(changed_configs: list, ts: str) -> tuple:
         </table>
       </div>
     </div>
-    </body></html>
     """
  
+    html += """
+    </div>
+    </body></html>
+    """
     return subject, html
  
  
@@ -793,7 +887,7 @@ def main():
             if attempt < 2:
                 print("[WARN] Fetch failed — retrying...")
                 time.sleep(5)  # Wait 5 seconds before retry
-                continue
+                return
             else:
                 print("[ERROR] Fetch failed after retry — aborting")
                 sys.exit(1)
