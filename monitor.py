@@ -279,7 +279,6 @@ def fetch_configs() -> Optional[dict]:
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,  # Increased from 10 to 30 seconds
         )
-         
         if resp.status_code >= 400:
             print(f"[ERROR] getAllConfigs failed with HTTP {resp.status_code}")
             print(f"[ERROR] Response: {resp.text[:500]}")
