@@ -886,7 +886,8 @@ def main():
             if attempt < 2:
                 print("[WARN] Fetch failed — retrying...")
                 time.sleep(5)  # Wait 5 seconds before retry
-                return
+                continue  # FIX: was `return`, which silently exited main() with code 0
+                          # and skipped the second poll attempt entirely.
             else:
                 print("[ERROR] Fetch failed after retry — aborting")
                 sys.exit(1)
@@ -937,6 +938,10 @@ def main():
         # Exit after successful poll
         print(f"\n[DONE] Run complete — poll successful")
         break
+    else:
+        # Loop exhausted without a `break` — every attempt failed to produce data.
+        print("[FATAL] All poll attempts exhausted without a successful fetch")
+        sys.exit(1)
  
  
 if __name__ == "__main__":
