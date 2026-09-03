@@ -84,6 +84,9 @@ LOG_FILE      = cfg["LOG_FILE"]
  
 POLL_INTERVAL = 10
 RUN_DURATION  = 20  # Allow up to 2 polls (1 normal + 1 retry if failed)
+
+CONFIG_RETRY_ATTEMPTS = 3
+CONFIG_RETRY_BACKOFF  = 2  # seconds, doubles each attempt
  
 # ENV — shared
 SMTP_USER   = os.environ.get("GMAIL_USER", "")
@@ -233,7 +236,7 @@ def get_valid_token() -> Optional[str]:
  
  
 # FETCH CONFIGS
-def fetch_config_by_id(config_id: str) -> Optional[dict]:
+def fetch_config_by_id(config_id: str, attempt: int = 1) -> Optional[dict]:
     token = get_valid_token()
     if not token:
         print(f"[ERROR] No valid token available for getConfig/{config_id}")
@@ -244,19 +247,23 @@ def fetch_config_by_id(config_id: str) -> Optional[dict]:
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,  # Increased from 10 to 30 seconds
         )
-         
+
         if resp.status_code >= 400:
             print(f"[ERROR] getConfig/{config_id} failed with HTTP {resp.status_code}")
             print(f"[ERROR] Response: {resp.text[:500]}")
             return None
-         
+
         resp.raise_for_status()
         return resp.json()
-    except requests.exceptions.Timeout:
-        print(f"[ERROR] getConfig/{config_id} timeout (30s)")  # Updated error message
-        return None
-    except requests.exceptions.ConnectionError as e:
-        print(f"[ERROR] getConfig/{config_id} connection error: {e}")
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        kind = "timeout (30s)" if isinstance(e, requests.exceptions.Timeout) else f"connection error: {e}"
+        if attempt < CONFIG_RETRY_ATTEMPTS:
+            wait = CONFIG_RETRY_BACKOFF * attempt
+            print(f"[ERROR] getConfig/{config_id} {kind} — retrying in {wait}s "
+                  f"(attempt {attempt}/{CONFIG_RETRY_ATTEMPTS})")
+            time.sleep(wait)
+            return fetch_config_by_id(config_id, attempt + 1)
+        print(f"[ERROR] getConfig/{config_id} {kind} — giving up after {CONFIG_RETRY_ATTEMPTS} attempts")
         return None
     except requests.RequestException as e:
         print(f"[ERROR] getConfig/{config_id} request failed: {e}")
@@ -293,17 +300,25 @@ def fetch_configs() -> Optional[dict]:
  
         for c in configs:
             cid  = str(c["id"])
-            full = fetch_config_by_id(cid)
+            full = fetch_config_by_id(cid)  # now retries internally up to CONFIG_RETRY_ATTEMPTS times
             if full:
                 result[cid] = full
                 print(f"[FETCH] Config #{cid} ({full.get('type', '?')}) fetched")
             else:
                 failed.append(cid)
-                print(f"[FETCH] Config #{cid} — detail fetch failed")
- 
+                print(f"[FETCH] Config #{cid} — detail fetch failed after retries")
+
+        # Only abort the poll if failures are widespread (likely a real outage,
+        # not a couple of transient resets). Tune the threshold as you like.
         if failed:
-            print(f"[WARN] {len(failed)} config(s) failed to fetch: {failed} — aborting poll, no diff will run")
-            return None
+            fail_ratio = len(failed) / max(len(configs), 1)
+            if fail_ratio > 0.15:  # more than 15% of configs failed
+                print(f"[WARN] {len(failed)} config(s) failed to fetch: {failed} "
+                      f"({fail_ratio:.0%} of {len(configs)}) — aborting poll, no diff will run")
+                return None
+            else:
+                print(f"[WARN] {len(failed)} config(s) failed to fetch after retries: {failed} "
+                      f"({fail_ratio:.0%} of {len(configs)}) — proceeding with partial data")
  
         return result
  
