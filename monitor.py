@@ -558,8 +558,10 @@ def generate_functional_summary(old_text: str, new_text: str) -> str:
         )
 
         if resp.status_code >= 400:
+            print(f"[ERROR] Groq summary API failed with HTTP {resp.status_code}")
+            print(f"[ERROR] Response: {resp.text[:500]}")
             return "Unable to compile functional impact analysis due to an upstream API connectivity issue."
-            
+
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
