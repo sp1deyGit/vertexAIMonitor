@@ -458,7 +458,7 @@ def format_instruction_text(raw: str) -> str:
                 "Content-Type":  "application/json",
             },
             json={
-                "model":      "llama-3.3-70b-versatile",  # Upgraded model for higher baseline TPM limits
+                "model":      "openai/gpt-oss-120b",  # llama-3.3-70b-versatile was decommissioned by Groq (Aug 2026)
                 "max_tokens": 2048,
                 "messages": [
                     {
@@ -540,7 +540,7 @@ def generate_functional_summary(old_text: str, new_text: str) -> str:
                 "Content-Type":  "application/json",
             },
             json={
-                "model":      "llama-3.3-70b-versatile",
+                "model":      "openai/gpt-oss-120b",
                 "max_tokens": 300,
                 "temperature": 0.2,
                 "messages": [
@@ -623,7 +623,7 @@ def ai_diff(old: str, new: str) -> tuple:
                         "Content-Type":  "application/json",
                     },
                     json={
-                        "model":      "llama-3.3-70b-versatile",  # Upgraded model for higher TPM allocations
+                        "model":      "openai/gpt-oss-120b",  # llama-3.3-70b-versatile was decommissioned by Groq (Aug 2026)
                         "max_tokens": 4096,
                         "temperature": 0.0,
                         "messages": [
