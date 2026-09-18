@@ -581,54 +581,6 @@ def get_groq_dispatcher() -> Optional[GroqDispatcher]:
     return _groq_dispatcher
 
 
-# FORMAT
-def format_instruction_text(raw: str) -> str:
-    """Use Groq (free) to reformat raw instruction text into clean readable format."""
-    if len(raw) < 100 or raw == "(not set)":
-        return raw
-
-    dispatcher = get_groq_dispatcher()
-    if dispatcher is None:
-        print("[FORMAT] GROQ_API_KEY not set — skipping formatting")
-        return raw
-
-    messages = [
-        {
-            "role":    "system",
-            "content": """You are a technical text formatter for OCR/extraction instructions.
-
-Your task: Reformat raw instruction text into clean, scannable format.
-
-RULES:
-1. Preserve all technical constraints and rules from the original
-2. Use bullet points (•) for lists of requirements
-3. Use numbered lists (1. 2. 3.) for sequential steps or priority-ordered rules
-4. Create clear section headers with "===HEADER===" format
-5. Bold key terms using **term** markdown
-6. Break long paragraphs into short, focused sentences
-7. Extract and highlight critical constraints (e.g., "NEVER modify...", "MUST include...")
-8. Maintain ALL regex patterns, field names, and technical details exactly as-is
-9. Use whitespace effectively — add blank lines between major sections
-10. Do NOT add or invent requirements not in the original text
-
-OUTPUT should be clean, maintainable, and dashboard-ready."""
-        },
-        {
-            "role":    "user",
-            "content": f"Reformat this instruction text:\n\n{raw}"
-        }
-    ]
-
-    print("[FORMAT] Dispatching instruction text to Groq model pool for formatting...")
-    content = dispatcher.complete(messages, max_tokens=2048, label="format")
-    if content is None:
-        print("[FORMAT] Groq model pool exhausted — returning raw text")
-        return raw
-
-    print("[FORMAT] Groq formatting succeeded")
-    return content.strip()
- 
- 
 # EMAIL AI UTILITIES
 def generate_functional_summary(old_text: str, new_text: str) -> str:
     """Uses Groq to generate a concise summary of how a prompt change transforms operational behavior."""
