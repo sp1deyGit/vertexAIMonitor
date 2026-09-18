@@ -1,6 +1,7 @@
 import difflib
 import json
 import os
+import random
 import smtplib
 import sys
 import time
@@ -438,35 +439,166 @@ def append_log(entries: list):
         json.dump(combined[:500], f, indent=2, default=str)
  
  
+# GROQ MODEL POOL / DISPATCH
+#
+# All email-summary text generation (formatting, functional summaries, semantic
+# diffing) is pure text — never image/OCR data — and used to hit a single
+# hardcoded model, which busts the Free-tier 8K TPM / 1K RPD bucket on that one
+# model whenever a poll finds several changed fields. GroqDispatcher spreads
+# calls across an ordered pool of interchangeable text models, each with its
+# own separate free-tier rate-limit bucket, and fails over to the next model
+# in the pool immediately on 429/5xx instead of hammering the one that just
+# got throttled.
+class GroqDispatcher:
+    MODEL_POOL = [
+        "groq/compound-mini",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-120b",
+    ]
+
+    MIN_CALL_INTERVAL   = 0.5  # seconds between dispatch rounds — caps bursts to ~2 calls/sec
+    POOL_RETRY_ATTEMPTS = 2    # extra backoff rounds once every model in the pool has failed once
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.usage = {m: {"calls": 0, "tokens": 0} for m in self.MODEL_POOL}
+        self._last_round_ts = 0.0
+
+    def _pace(self):
+        """Rate-limit dispatch rounds (not the immediate in-round model failover)
+        so independent Groq calls in a run don't burst faster than ~2/sec."""
+        elapsed = time.monotonic() - self._last_round_ts
+        if elapsed < self.MIN_CALL_INTERVAL:
+            time.sleep(self.MIN_CALL_INTERVAL - elapsed)
+        self._last_round_ts = time.monotonic()
+
+    def _ordered_models(self):
+        """Least-loaded first: fewest calls made this run, ties broken by fewer tokens used."""
+        return sorted(self.MODEL_POOL, key=lambda m: (self.usage[m]["calls"], self.usage[m]["tokens"]))
+
+    @staticmethod
+    def _backoff_seconds(round_idx: int) -> float:
+        return (2 ** (round_idx + 1)) + random.uniform(0, 0.5)
+
+    def complete(self, messages: list, max_tokens: int = 1024, temperature: Optional[float] = None,
+                 timeout: int = 30, label: str = "groq") -> Optional[str]:
+        """Run a chat completion against the pool, least-loaded model first.
+
+        Immediately rotates to the next model on 429/5xx. If every model fails
+        in a round, backs off (Retry-After-aware, else exponential + jitter)
+        and tries one more full round before giving up. A 413 is treated as
+        non-retryable and non-reroutable — returns None right away so the
+        caller can fall back to local logic.
+        """
+        last_err = None
+        for round_idx in range(1 + self.POOL_RETRY_ATTEMPTS):
+            self._pace()
+            retry_after_seen = 0.0
+
+            for model in self._ordered_models():
+                payload = {"model": model, "max_tokens": max_tokens, "messages": messages}
+                if temperature is not None:
+                    payload["temperature"] = temperature
+
+                try:
+                    print(f"[GROQ] ({label}) Calling model '{model}'...")
+                    resp = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type":  "application/json",
+                        },
+                        json=payload,
+                        timeout=timeout,
+                    )
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    print(f"[GROQ] ({label}) '{model}' network error ({e}) — trying next model")
+                    self.usage[model]["calls"] += 1
+                    last_err = e
+                    continue
+
+                if resp.status_code == 413:
+                    print(f"[GROQ] ({label}) '{model}' returned 413 (payload too large) "
+                          f"— not retryable/reroutable, falling back to local logic")
+                    return None
+
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    self.usage[model]["calls"] += 1
+                    retry_after = resp.headers.get("Retry-After")
+                    print(f"[GROQ] ({label}) '{model}' returned HTTP {resp.status_code} "
+                          f"— rotating to next model" + (f" (Retry-After: {retry_after}s)" if retry_after else ""))
+                    if retry_after:
+                        try:
+                            retry_after_seen = max(retry_after_seen, float(retry_after))
+                        except ValueError:
+                            pass
+                    last_err = f"HTTP {resp.status_code}"
+                    continue
+
+                if resp.status_code >= 400:
+                    self.usage[model]["calls"] += 1
+                    print(f"[GROQ] ({label}) '{model}' failed with HTTP {resp.status_code}: {resp.text[:300]}")
+                    last_err = f"HTTP {resp.status_code}"
+                    continue
+
+                try:
+                    body    = resp.json()
+                    content = body["choices"][0]["message"]["content"]
+                except Exception as e:
+                    self.usage[model]["calls"] += 1
+                    print(f"[GROQ] ({label}) '{model}' returned unparseable response ({e}) — trying next model")
+                    last_err = e
+                    continue
+
+                self.usage[model]["calls"]  += 1
+                self.usage[model]["tokens"] += body.get("usage", {}).get("total_tokens", 0)
+                print(f"[GROQ] ({label}) '{model}' succeeded")
+                return content
+
+            # Every model in the pool failed this round.
+            if round_idx < self.POOL_RETRY_ATTEMPTS:
+                wait = retry_after_seen if retry_after_seen > 0 else self._backoff_seconds(round_idx)
+                print(f"[GROQ] ({label}) Entire model pool exhausted this round "
+                      f"— backing off {wait:.1f}s before retry round {round_idx + 2}")
+                time.sleep(wait)
+
+        print(f"[GROQ] ({label}) All models in pool exhausted after "
+              f"{1 + self.POOL_RETRY_ATTEMPTS} round(s) — giving up (last error: {last_err})")
+        return None
+
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+_groq_dispatcher: Optional[GroqDispatcher] = None
+
+
+def get_groq_dispatcher() -> Optional[GroqDispatcher]:
+    global _groq_dispatcher
+    if not GROQ_API_KEY:
+        return None
+    if _groq_dispatcher is None:
+        _groq_dispatcher = GroqDispatcher(GROQ_API_KEY)
+    return _groq_dispatcher
+
+
 # FORMAT
 def format_instruction_text(raw: str) -> str:
     """Use Groq (free) to reformat raw instruction text into clean readable format."""
     if len(raw) < 100 or raw == "(not set)":
         return raw
- 
-    groq_key = os.environ.get("GROQ_API_KEY", "")
-    if not groq_key:
+
+    dispatcher = get_groq_dispatcher()
+    if dispatcher is None:
         print("[FORMAT] GROQ_API_KEY not set — skipping formatting")
         return raw
- 
-    try:
-        print("[FORMAT] Calling Groq API to format instruction text...")
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {groq_key}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "model":      "openai/gpt-oss-120b",  # llama-3.3-70b-versatile was decommissioned by Groq (Aug 2026)
-                "max_tokens": 2048,
-                "messages": [
-                    {
-                        "role":    "system",
-                        "content": """You are a technical text formatter for OCR/extraction instructions.
- 
+
+    messages = [
+        {
+            "role":    "system",
+            "content": """You are a technical text formatter for OCR/extraction instructions.
+
 Your task: Reformat raw instruction text into clean, scannable format.
- 
+
 RULES:
 1. Preserve all technical constraints and rules from the original
 2. Use bullet points (•) for lists of requirements
@@ -478,48 +610,30 @@ RULES:
 8. Maintain ALL regex patterns, field names, and technical details exactly as-is
 9. Use whitespace effectively — add blank lines between major sections
 10. Do NOT add or invent requirements not in the original text
- 
+
 OUTPUT should be clean, maintainable, and dashboard-ready."""
-                    },
-                    {
-                        "role":    "user",
-                        "content": f"Reformat this instruction text:\n\n{raw}"
-                    }
-                ],
-            },
-            timeout=30,
-        )
-         
-        if resp.status_code >= 400:
-            print(f"[ERROR] Groq format API failed with HTTP {resp.status_code}")
-            print(f"[ERROR] Response: {resp.text[:500]}")
-            return raw
-         
-        resp.raise_for_status()
-        result = resp.json()["choices"][0]["message"]["content"].strip()
-        print("[FORMAT] Groq formatting succeeded")
-        return result
-    except requests.exceptions.Timeout:
-        print(f"[ERROR] Groq format API timeout (30s)")
+        },
+        {
+            "role":    "user",
+            "content": f"Reformat this instruction text:\n\n{raw}"
+        }
+    ]
+
+    print("[FORMAT] Dispatching instruction text to Groq model pool for formatting...")
+    content = dispatcher.complete(messages, max_tokens=2048, label="format")
+    if content is None:
+        print("[FORMAT] Groq model pool exhausted — returning raw text")
         return raw
-    except requests.exceptions.ConnectionError as e:
-        print(f"[ERROR] Groq format API connection error: {e}")
-        return raw
-    except requests.RequestException as e:
-        print(f"[ERROR] Groq format API request failed: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"[ERROR] Status: {e.response.status_code} | Body: {e.response.text[:500]}")
-        return raw
-    except Exception as e:
-        print(f"[ERROR] Groq format API unexpected error: {e}")
-        return raw
+
+    print("[FORMAT] Groq formatting succeeded")
+    return content.strip()
  
  
 # EMAIL AI UTILITIES
 def generate_functional_summary(old_text: str, new_text: str) -> str:
     """Uses Groq to generate a concise summary of how a prompt change transforms operational behavior."""
-    groq_key = os.environ.get("GROQ_API_KEY", "")
-    if not groq_key:
+    dispatcher = get_groq_dispatcher()
+    if dispatcher is None:
         return "GROQ_API_KEY environment secret is missing. Cannot evaluate prompt modifications."
 
     # Perform line-level comparison locally to optimize token payloads
@@ -531,48 +645,29 @@ def generate_functional_summary(old_text: str, new_text: str) -> str:
     if not delta_lines.strip():
         return "No explicit configuration or structural rule modifications detected in this instruction field update."
 
-    try:
-        print("[SUMMARY] Dispatching isolated prompt delta to Groq for change analysis...")
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {groq_key}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "model":      "openai/gpt-oss-120b",
-                "max_tokens": 300,
-                "temperature": 0.2,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are an expert prompt engineer and code intelligence analyzer. You will receive a unified text diff outlining updates to an OCR extraction system instruction prompt. Provide a highly direct, concise 2-to-3 sentence explanation summarizing what behavioral changes, technical rules, or execution restrictions this modification forces onto the processing engine."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Analyze the following changes made to the system instructions and explain its real-world functional impact:\n\n{delta_lines}"
-                    }
-                ]
-            },
-            timeout=30,
-        )
+    messages = [
+        {
+            "role": "system",
+            "content": "You are an expert prompt engineer and code intelligence analyzer. You will receive a unified text diff outlining updates to an OCR extraction system instruction prompt. Provide a highly direct, concise 2-to-3 sentence explanation summarizing what behavioral changes, technical rules, or execution restrictions this modification forces onto the processing engine."
+        },
+        {
+            "role": "user",
+            "content": f"Analyze the following changes made to the system instructions and explain its real-world functional impact:\n\n{delta_lines}"
+        }
+    ]
 
-        if resp.status_code >= 400:
-            print(f"[ERROR] Groq summary API failed with HTTP {resp.status_code}")
-            print(f"[ERROR] Response: {resp.text[:500]}")
-            return "Unable to compile functional impact analysis due to an upstream API connectivity issue."
+    print("[SUMMARY] Dispatching isolated prompt delta to Groq model pool for change analysis...")
+    content = dispatcher.complete(messages, max_tokens=300, temperature=0.2, label="summary")
+    if content is None:
+        return "Unable to compile functional impact analysis — Groq model pool exhausted or unavailable."
 
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"[ERROR] Failed to compile prompt functional overview: {e}")
-        return "A processing error occurred while attempting to dynamically evaluate the prompt engineering changes."
+    return content.strip()
 
 
 def ai_diff(old: str, new: str) -> tuple:
     """Use Groq to semantically compare two texts by processing only changed blocks to save tokens."""
-    groq_key = os.environ.get("GROQ_API_KEY", "")
-    if not groq_key:
+    dispatcher = get_groq_dispatcher()
+    if dispatcher is None:
         print("[DIFF] GROQ_API_KEY not set — falling back to character diff")
         return char_diff(old, new)
  
@@ -614,66 +709,53 @@ def ai_diff(old: str, new: str) -> tuple:
                 new_html_chunks.append(block_new_html)
                 continue
  
-            try:
-                print(f"[DIFF] Calling Groq API for semantic block diff ({estimated_tokens} est. tokens)...")
-                resp = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {groq_key}",
-                        "Content-Type":  "application/json",
-                    },
-                    json={
-                        "model":      "openai/gpt-oss-120b",  # llama-3.3-70b-versatile was decommissioned by Groq (Aug 2026)
-                        "max_tokens": 4096,
-                        "temperature": 0.0,
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": """You are a precise semantic diff tool for technical text segments.
- 
+            print(f"[DIFF] Dispatching semantic block diff to Groq model pool ({estimated_tokens} est. tokens)...")
+            messages = [
+                {
+                    "role": "system",
+                    "content": """You are a precise semantic diff tool for technical text segments.
+
 TASK: Compare the BEFORE and AFTER text segment, and return HTML with highlighted changes.
- 
+
 OUTPUT: Return ONLY a valid JSON object with exactly two keys:
   "before_html" — the BEFORE text segment with changes marked
   "after_html" — the AFTER text segment with changes marked
- 
+
 HIGHLIGHTING RULES:
 - REMOVED/CHANGED in BEFORE: wrap in <mark style="background:#ffb3b3;color:#900;border-radius:2px;padding:0 1px;">text</mark>
 - ADDED/CHANGED in AFTER: wrap in <mark style="background:#b3ffb3;color:#060;border-radius:2px;padding:0 1px;">text</mark>
 - Highlight at SENTENCE or PHRASE level (not character-by-character)
 - Preserve ALL line breaks and whitespace using proper HTML entities/formatting
 - Return ONLY valid JSON — no markdown, no explanation, no fences"""
-                            },
-                            {
-                                "role": "user",
-                                "content": f"BEFORE:\n{old_chunk_text}\n\nAFTER:\n{new_chunk_text}"
-                            }
-                        ],
-                    },
-                    timeout=45,
-                )
-                 
-                if resp.status_code >= 400:
-                    print(f"[ERROR] Groq block diff failed with HTTP {resp.status_code}. Using fallback char_diff.")
-                    block_old_html, block_new_html = char_diff(old_chunk_text, new_chunk_text)
-                    old_html_chunks.append(block_old_html)
-                    new_html_chunks.append(block_new_html)
-                    continue
-                 
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"].strip()
-                
+                },
+                {
+                    "role": "user",
+                    "content": f"BEFORE:\n{old_chunk_text}\n\nAFTER:\n{new_chunk_text}"
+                }
+            ]
+
+            content = dispatcher.complete(messages, max_tokens=4096, temperature=0.0, timeout=45, label="ai_diff")
+
+            if content is None:
+                print("[DIFF] Groq model pool exhausted for this block — using fallback char_diff")
+                block_old_html, block_new_html = char_diff(old_chunk_text, new_chunk_text)
+                old_html_chunks.append(block_old_html)
+                new_html_chunks.append(block_new_html)
+                continue
+
+            try:
+                content = content.strip()
                 # Sanitize random LLM markdown wrappers if present
                 if content.startswith("```"):
                     content = content.strip("`").strip("json").strip()
-                    
-                parsed  = json.loads(content)
+
+                parsed = json.loads(content)
                 old_html_chunks.append(parsed["before_html"])
                 new_html_chunks.append(parsed["after_html"])
                 print("[DIFF] Groq semantic block diff succeeded")
-     
+
             except Exception as e:
-                print(f"[ERROR] Semantic block diff exception: {e} — using fallback char_diff")
+                print(f"[ERROR] Semantic block diff parse failure: {e} — using fallback char_diff")
                 block_old_html, block_new_html = char_diff(old_chunk_text, new_chunk_text)
                 old_html_chunks.append(block_old_html)
                 new_html_chunks.append(block_new_html)
