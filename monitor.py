@@ -451,9 +451,9 @@ def append_log(entries: list):
 # got throttled.
 class GroqDispatcher:
     MODEL_POOL = [
-        "groq/compound-mini",
+        "llama-3.1-8b-instant",
         "openai/gpt-oss-20b",
-        "qwen/qwen3.8-27b",
+        "qwen/qwen3-32b",
         "openai/gpt-oss-120b",
     ]
 
@@ -463,6 +463,7 @@ class GroqDispatcher:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.usage = {m: {"calls": 0, "tokens": 0} for m in self.MODEL_POOL}
+        self.dead = set()  # models confirmed nonexistent/inaccessible this run — stop wasting calls on them
         self._last_round_ts = 0.0
 
     def _pace(self):
@@ -474,8 +475,10 @@ class GroqDispatcher:
         self._last_round_ts = time.monotonic()
 
     def _ordered_models(self):
-        """Least-loaded first: fewest calls made this run, ties broken by fewer tokens used."""
-        return sorted(self.MODEL_POOL, key=lambda m: (self.usage[m]["calls"], self.usage[m]["tokens"]))
+        """Least-loaded first: fewest calls made this run, ties broken by fewer tokens used.
+        Excludes models already confirmed dead (e.g. 404 model_not_found) this run."""
+        live = [m for m in self.MODEL_POOL if m not in self.dead]
+        return sorted(live, key=lambda m: (self.usage[m]["calls"], self.usage[m]["tokens"]))
 
     @staticmethod
     def _backoff_seconds(round_idx: int) -> float:
@@ -485,18 +488,26 @@ class GroqDispatcher:
                  timeout: int = 30, label: str = "groq") -> Optional[str]:
         """Run a chat completion against the pool, least-loaded model first.
 
-        Immediately rotates to the next model on 429/5xx. If every model fails
-        in a round, backs off (Retry-After-aware, else exponential + jitter)
-        and tries one more full round before giving up. A 413 is treated as
-        non-retryable and non-reroutable — returns None right away so the
-        caller can fall back to local logic.
+        Immediately rotates to the next model on 429/5xx. A model that comes
+        back 404 (model decommissioned/not found on this account) is
+        blacklisted for the rest of the run so it stops burning an attempt on
+        every subsequent call. If every *live* model fails in a round, backs
+        off (Retry-After-aware, else exponential + jitter) and tries one more
+        full round before giving up. A 413 is treated as non-retryable and
+        non-reroutable — returns None right away so the caller can fall back
+        to local logic.
         """
         last_err = None
         for round_idx in range(1 + self.POOL_RETRY_ATTEMPTS):
+            models = self._ordered_models()
+            if not models:
+                print(f"[GROQ] ({label}) Every model in the pool is dead — giving up (last error: {last_err})")
+                return None
+
             self._pace()
             retry_after_seen = 0.0
 
-            for model in self._ordered_models():
+            for model in models:
                 payload = {"model": model, "max_tokens": max_tokens, "messages": messages}
                 if temperature is not None:
                     payload["temperature"] = temperature
@@ -522,6 +533,14 @@ class GroqDispatcher:
                     print(f"[GROQ] ({label}) '{model}' returned 413 (payload too large) "
                           f"— not retryable/reroutable, falling back to local logic")
                     return None
+
+                if resp.status_code == 404:
+                    self.usage[model]["calls"] += 1
+                    self.dead.add(model)
+                    print(f"[GROQ] ({label}) '{model}' returned 404 (not found on this account) "
+                          f"— blacklisting it for the rest of this run: {resp.text[:300]}")
+                    last_err = f"HTTP {resp.status_code}"
+                    continue
 
                 if resp.status_code == 429 or resp.status_code >= 500:
                     self.usage[model]["calls"] += 1
@@ -556,7 +575,7 @@ class GroqDispatcher:
                 print(f"[GROQ] ({label}) '{model}' succeeded")
                 return content
 
-            # Every model in the pool failed this round.
+            # Every live model in the pool failed this round.
             if round_idx < self.POOL_RETRY_ATTEMPTS:
                 wait = retry_after_seen if retry_after_seen > 0 else self._backoff_seconds(round_idx)
                 print(f"[GROQ] ({label}) Entire model pool exhausted this round "
@@ -582,6 +601,15 @@ def get_groq_dispatcher() -> Optional[GroqDispatcher]:
 
 
 # EMAIL AI UTILITIES
+
+# Same "4 chars ≈ 1 token" estimate and 4500-token ceiling ai_diff() uses to
+# route oversized blocks to local processing before ever calling Groq — an
+# ADDED config's full systemInstruction can run to 10k+ estimated tokens,
+# which reliably 413s every model in the pool (413 is non-reroutable, so
+# without this cap the summary call fails outright instead of degrading).
+SUMMARY_DELTA_CHAR_LIMIT = 4500 * 4
+
+
 def generate_functional_summary(old_text: str, new_text: str) -> str:
     """Uses Groq to generate a concise summary of how a prompt change transforms operational behavior."""
     dispatcher = get_groq_dispatcher()
@@ -596,6 +624,15 @@ def generate_functional_summary(old_text: str, new_text: str) -> str:
 
     if not delta_lines.strip():
         return "No explicit configuration or structural rule modifications detected in this instruction field update."
+
+    if len(delta_lines) > SUMMARY_DELTA_CHAR_LIMIT:
+        half = SUMMARY_DELTA_CHAR_LIMIT // 2
+        original_len = len(delta_lines)
+        delta_lines = (f"{delta_lines[:half]}\n\n"
+                       f"... [diff truncated for length — {original_len} chars total] ...\n\n"
+                       f"{delta_lines[-half:]}")
+        print(f"[SUMMARY] Delta too large ({original_len} chars) — truncated to "
+              f"{SUMMARY_DELTA_CHAR_LIMIT} chars (head+tail) before calling Groq")
 
     messages = [
         {
